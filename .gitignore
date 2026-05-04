@@ -15,7 +15,6 @@ Package.resolved
 *~
 
 # Distribution artifacts
-*.dmg
 *.zip
 *.xcarchive/
 
