@@ -1,0 +1,26 @@
+# Xcode
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Distribution artifacts
+*.dmg
+*.zip
+*.xcarchive/
+
+# Acorn source files
+*.acorn
+
+# Test data
+*.rplan
