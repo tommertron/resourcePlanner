@@ -461,14 +461,82 @@ struct PlanningGridView: View {
 
             case .allocation(let assignmentID, let allocationID):
                 let initiative = initiativeForAssignment(assignmentID)
-                ForEach(monthKeys, id: \.self) { mk in
+                ForEach(Array(monthKeys.enumerated()), id: \.element) { idx, mk in
                     if let binding = allocationBinding(assignmentID: assignmentID, allocationID: allocationID) {
-                        MonthlyGridCell(allocation: binding, monthKey: mk, tintColor: initiative?.color.swiftUIColor)
+                        MonthlyGridCell(
+                            allocation: binding,
+                            monthKey: mk,
+                            tintColor: initiative?.color.swiftUIColor,
+                            columnIndex: idx,
+                            onDragFill: { sourceCol, delta, phase in
+                                handleDragFill(
+                                    assignmentID: assignmentID,
+                                    allocationID: allocationID,
+                                    sourceCol: sourceCol,
+                                    delta: delta,
+                                    phase: phase
+                                )
+                            }
+                        )
                     } else {
                         Color.clear.frame(width: monthlyCellWidth, height: rowHeight)
                     }
                 }
             }
+        }
+        .coordinateSpace(name: "planningRow")
+        .contextMenu { allocationContextMenu(row: row) }
+    }
+
+    @ViewBuilder
+    private func allocationContextMenu(row: PlanningRow) -> some View {
+        if case let .allocation(assignmentID, allocationID) = row.kind {
+            Button("Fill across row from first non-zero cell") {
+                fillRowFromFirstValue(assignmentID: assignmentID, allocationID: allocationID)
+            }
+            Button("Clear row", role: .destructive) {
+                clearAllocationRow(assignmentID: assignmentID, allocationID: allocationID)
+            }
+        }
+    }
+
+    private func handleDragFill(
+        assignmentID: UUID,
+        allocationID: UUID,
+        sourceCol: Int,
+        delta: Int,
+        phase: DragFillPhase
+    ) {
+        guard delta != 0 else { return }
+        guard let binding = allocationBinding(assignmentID: assignmentID, allocationID: allocationID) else { return }
+        let keys = monthKeys
+        guard sourceCol >= 0, sourceCol < keys.count else { return }
+        let sourceKey = keys[sourceCol]
+        let value = binding.wrappedValue.months[sourceKey] ?? 0
+        guard value > 0 else { return }
+        let lo = max(0, min(sourceCol, sourceCol + delta))
+        let hi = min(keys.count - 1, max(sourceCol, sourceCol + delta))
+        // Apply on every change so users see the fill happen live; .ended is a no-op.
+        guard phase == .changed else { return }
+        for i in lo...hi where i != sourceCol {
+            binding.wrappedValue.months[keys[i]] = value
+        }
+    }
+
+    private func fillRowFromFirstValue(assignmentID: UUID, allocationID: UUID) {
+        guard let binding = allocationBinding(assignmentID: assignmentID, allocationID: allocationID) else { return }
+        let keys = monthKeys
+        guard let firstFilled = keys.first(where: { (binding.wrappedValue.months[$0] ?? 0) > 0 }),
+              let value = binding.wrappedValue.months[firstFilled], value > 0 else { return }
+        for k in keys {
+            binding.wrappedValue.months[k] = value
+        }
+    }
+
+    private func clearAllocationRow(assignmentID: UUID, allocationID: UUID) {
+        guard let binding = allocationBinding(assignmentID: assignmentID, allocationID: allocationID) else { return }
+        for k in monthKeys {
+            binding.wrappedValue.months.removeValue(forKey: k)
         }
     }
 

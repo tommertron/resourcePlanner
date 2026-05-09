@@ -10,6 +10,20 @@ enum ReportCSVExporter {
         lines.append("Currency,\(displayCurrency)")
         let years = ReportData.allActiveYears(plan: plan)
 
+        // Section 0: Cost by Program
+        let programEntries = ReportData.programYearlyCosts(plan: plan, resources: resources, currencyContext: ctx)
+        if !programEntries.isEmpty {
+            lines.append("Cost by Program")
+            lines.append(csvRow(["Program", "Initiatives"] + years.map(String.init) + ["Total"]))
+            for entry in programEntries {
+                var row = [entry.name, "\(entry.initiativeCount)"]
+                for year in years { row.append(fmt(entry.costByYear[year] ?? 0)) }
+                row.append(fmt(entry.totalCost))
+                lines.append(csvRow(row))
+            }
+            lines.append("")
+        }
+
         // Section 1: Cost by Initiative
         lines.append("Cost by Initiative")
         lines.append(csvRow(["Initiative"] + years.map(String.init) + ["Total"]))

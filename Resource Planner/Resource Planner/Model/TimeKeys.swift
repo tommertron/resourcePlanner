@@ -108,7 +108,7 @@ nonisolated struct StringCodingKey: CodingKey, Sendable {
 }
 
 extension Calendar {
-    public static var iso8601UTC: Calendar {
+    public nonisolated static var iso8601UTC: Calendar {
         var c = Calendar(identifier: .iso8601)
         c.timeZone = TimeZone(identifier: "UTC") ?? .gmt
         c.minimumDaysInFirstWeek = 4
@@ -116,7 +116,7 @@ extension Calendar {
         return c
     }
 
-    public static var gregorianUTC: Calendar {
+    public nonisolated static var gregorianUTC: Calendar {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(identifier: "UTC") ?? .gmt
         return c

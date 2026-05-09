@@ -23,21 +23,40 @@ enum ExportFormat: String, CaseIterable {
     }
 }
 
-/// Shows an NSSavePanel for exporting a file in the given format.
-/// Calls `completion` with the chosen URL, or nil if cancelled.
-func showExportSavePanel(
+/// Shows an NSSavePanel for exporting a file in the given format,
+/// then writes `data` to the chosen URL. Surfaces failures via NSAlert.
+func exportData(
+    _ data: Data,
     title: String,
     defaultName: String,
-    format: ExportFormat,
-    completion: @escaping (URL?) -> Void
+    format: ExportFormat
 ) {
     let panel = NSSavePanel()
     panel.title = title
-    panel.nameFieldStringValue = "\(defaultName).\(format.fileExtension)"
+    // NSSavePanel will append the extension itself based on allowedContentTypes,
+    // so don't pre-append it here (that produced "Name.pdf.pdf" before).
+    panel.nameFieldStringValue = sanitizeFilename(defaultName)
     panel.allowedContentTypes = [format.utType]
     panel.canCreateDirectories = true
 
     panel.begin { response in
-        completion(response == .OK ? panel.url : nil)
+        guard response == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Export failed"
+            alert.informativeText = "Could not write \(format.displayName) to \(url.path):\n\(error.localizedDescription)"
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
+}
+
+/// File system reserved characters and characters that confuse some file pickers.
+private func sanitizeFilename(_ name: String) -> String {
+    var s = name
+    for c in [":", "/", "\\"] { s = s.replacingOccurrences(of: c, with: "-") }
+    return s
 }

@@ -149,6 +149,47 @@ nonisolated public struct ExpectedReturn: Codable, Hashable, Identifiable, Senda
     }
 }
 
+/// A grouping above initiatives. Programs have their own date range; initiatives belonging to
+/// a program inherit those dates on creation but can be edited independently afterwards.
+nonisolated public struct Program: Codable, Hashable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var startDate: Date
+    public var endDate: Date
+    public var notes: String
+    public var color: InitiativeColor
+    public var icon: String
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        startDate: Date,
+        endDate: Date,
+        notes: String = "",
+        color: InitiativeColor = .indigo,
+        icon: String = "rectangle.stack.fill"
+    ) {
+        self.id = id
+        self.name = name
+        self.startDate = startDate
+        self.endDate = endDate
+        self.notes = notes
+        self.color = color
+        self.icon = icon
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        startDate = try container.decode(Date.self, forKey: .startDate)
+        endDate = try container.decode(Date.self, forKey: .endDate)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        color = try container.decodeIfPresent(InitiativeColor.self, forKey: .color) ?? .indigo
+        icon = try container.decodeIfPresent(String.self, forKey: .icon) ?? "rectangle.stack.fill"
+    }
+}
+
 nonisolated public struct Initiative: Hashable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
@@ -161,6 +202,9 @@ nonisolated public struct Initiative: Hashable, Identifiable, Sendable {
     public var expectedReturns: [ExpectedReturn]
     /// Optional end of the investment evaluation window. If nil, defaults to initiative endDate.
     public var investmentWindowEnd: Date?
+    /// Optional parent program. When set on creation the initiative inherits program dates;
+    /// edits to the initiative's own dates after that point are independent.
+    public var programID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -172,7 +216,8 @@ nonisolated public struct Initiative: Hashable, Identifiable, Sendable {
         icon: String = "flag.fill",
         otherCosts: [OtherCost] = [],
         expectedReturns: [ExpectedReturn] = [],
-        investmentWindowEnd: Date? = nil
+        investmentWindowEnd: Date? = nil,
+        programID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -184,6 +229,7 @@ nonisolated public struct Initiative: Hashable, Identifiable, Sendable {
         self.otherCosts = otherCosts
         self.expectedReturns = expectedReturns
         self.investmentWindowEnd = investmentWindowEnd
+        self.programID = programID
     }
 
     /// The effective end of the investment window for ROI/payback calculations.
@@ -195,7 +241,7 @@ nonisolated public struct Initiative: Hashable, Identifiable, Sendable {
 extension Initiative: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, name, startDate, endDate, notes, color, icon, otherCosts
-        case expectedReturns, investmentWindowEnd
+        case expectedReturns, investmentWindowEnd, programID
         // Legacy key for migration
         case expectedReturn
     }
@@ -211,6 +257,7 @@ extension Initiative: Codable {
         icon = try container.decodeIfPresent(String.self, forKey: .icon) ?? "flag.fill"
         otherCosts = try container.decodeIfPresent([OtherCost].self, forKey: .otherCosts) ?? []
         investmentWindowEnd = try container.decodeIfPresent(Date.self, forKey: .investmentWindowEnd)
+        programID = try container.decodeIfPresent(UUID.self, forKey: .programID)
 
         // Migrate legacy scalar expectedReturn → expectedReturns array
         if let returns = try container.decodeIfPresent([ExpectedReturn].self, forKey: .expectedReturns) {
@@ -234,6 +281,7 @@ extension Initiative: Codable {
         try container.encode(otherCosts, forKey: .otherCosts)
         try container.encode(expectedReturns, forKey: .expectedReturns)
         try container.encodeIfPresent(investmentWindowEnd, forKey: .investmentWindowEnd)
+        try container.encodeIfPresent(programID, forKey: .programID)
     }
 }
 
@@ -339,10 +387,11 @@ extension Plan {
     }
 }
 
-nonisolated public struct Plan: Codable, Hashable, Identifiable, Sendable {
+nonisolated public struct Plan: Hashable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var notes: String
+    public var programs: [Program]
     public var initiatives: [Initiative]
     public var assignments: [Assignment]
 
@@ -350,13 +399,41 @@ nonisolated public struct Plan: Codable, Hashable, Identifiable, Sendable {
         id: UUID = UUID(),
         name: String,
         notes: String = "",
+        programs: [Program] = [],
         initiatives: [Initiative] = [],
         assignments: [Assignment] = []
     ) {
         self.id = id
         self.name = name
         self.notes = notes
+        self.programs = programs
         self.initiatives = initiatives
         self.assignments = assignments
+    }
+}
+
+extension Plan: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, notes, programs, initiatives, assignments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        programs = try c.decodeIfPresent([Program].self, forKey: .programs) ?? []
+        initiatives = try c.decode([Initiative].self, forKey: .initiatives)
+        assignments = try c.decode([Assignment].self, forKey: .assignments)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(programs, forKey: .programs)
+        try c.encode(initiatives, forKey: .initiatives)
+        try c.encode(assignments, forKey: .assignments)
     }
 }

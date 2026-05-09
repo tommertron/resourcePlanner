@@ -1,11 +1,12 @@
 import Foundation
 
 nonisolated public struct PlannerDocument: Codable, Hashable, Sendable {
-    public static let currentSchemaVersion = 3
+    public static let currentSchemaVersion = 4
 
     public var schemaVersion: Int
     public var resources: [Resource]
     public var roles: [Role]
+    public var teams: [Team]
     public var plans: [Plan]
     public var displayCurrency: String
     public var conversionRates: [String: Double]
@@ -14,6 +15,7 @@ nonisolated public struct PlannerDocument: Codable, Hashable, Sendable {
         schemaVersion: Int = PlannerDocument.currentSchemaVersion,
         resources: [Resource] = [],
         roles: [Role] = [],
+        teams: [Team] = [],
         plans: [Plan] = [],
         displayCurrency: String = "USD",
         conversionRates: [String: Double] = ["USD": 1.0, "CAD": 0.73, "EUR": 1.08]
@@ -21,6 +23,7 @@ nonisolated public struct PlannerDocument: Codable, Hashable, Sendable {
         self.schemaVersion = schemaVersion
         self.resources = resources
         self.roles = roles
+        self.teams = teams
         self.plans = plans
         self.displayCurrency = displayCurrency
         self.conversionRates = conversionRates
@@ -31,6 +34,7 @@ nonisolated public struct PlannerDocument: Codable, Hashable, Sendable {
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         resources = try container.decode([Resource].self, forKey: .resources)
         roles = try container.decode([Role].self, forKey: .roles)
+        teams = try container.decodeIfPresent([Team].self, forKey: .teams) ?? []
         plans = try container.decode([Plan].self, forKey: .plans)
         displayCurrency = try container.decodeIfPresent(String.self, forKey: .displayCurrency) ?? "USD"
         conversionRates = try container.decodeIfPresent([String: Double].self, forKey: .conversionRates)

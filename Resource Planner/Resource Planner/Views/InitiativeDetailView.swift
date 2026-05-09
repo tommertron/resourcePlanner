@@ -58,6 +58,16 @@ struct InitiativeDetailView: View {
                                 .frame(width: 16)
                         }
                     }
+
+                    if let plan, !plan.programs.isEmpty {
+                        Picker("Program", selection: programBinding) {
+                            Text("(None)").tag(UUID?.none)
+                            ForEach(plan.programs) { p in
+                                Text(p.name.isEmpty ? "Untitled program" : p.name)
+                                    .tag(UUID?.some(p.id))
+                            }
+                        }
+                    }
                 }
 
                 Section("Description") {
@@ -556,10 +566,7 @@ struct InitiativeDetailView: View {
         case .json: data = ReportJSONExporter.exportInitiative(initiative: initiative, plan: plan, resources: resources, roles: roles, displayCurrency: displayCurrency, conversionRates: conversionRates)
         }
 
-        showExportSavePanel(title: "Export Initiative Report", defaultName: defaultName, format: format) { url in
-            guard let url else { return }
-            try? data.write(to: url)
-        }
+        exportData(data, title: "Export Initiative Report", defaultName: defaultName, format: format)
     }
 
     private func initiativeYears(plan: Plan) -> [Int] {
@@ -608,6 +615,10 @@ struct InitiativeDetailView: View {
                 initiative.endDate = max(newValue, initiative.startDate)
             }
         )
+    }
+
+    private var programBinding: Binding<UUID?> {
+        Binding(get: { initiative.programID }, set: { initiative.programID = $0 })
     }
 
     /// Binding for the investment window end date, defaulting to initiative endDate.

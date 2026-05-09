@@ -29,6 +29,27 @@ enum ReportPDFExporter {
         let renderer = PDFRenderer(title: "\(plan.name) — Overview Report")
         let years = ReportData.allActiveYears(plan: plan)
 
+        // Cost by Program (top of report)
+        let programEntries = ReportData.programYearlyCosts(plan: plan, resources: resources, currencyContext: ctx)
+        if !programEntries.isEmpty {
+            renderer.addHeading("Cost by Program")
+            let progHeader = ["Program"] + years.map(String.init) + ["Total"]
+            var progRows: [[String]] = []
+            for entry in programEntries {
+                var row = ["\(entry.name) (\(entry.initiativeCount))"]
+                for year in years { row.append(cur(entry.costByYear[year] ?? 0)) }
+                row.append(cur(entry.totalCost))
+                progRows.append(row)
+            }
+            var progTotalRow = ["Total"]
+            for year in years {
+                progTotalRow.append(cur(programEntries.reduce(0) { $0 + ($1.costByYear[year] ?? 0) }))
+            }
+            progTotalRow.append(cur(programEntries.reduce(0) { $0 + $1.totalCost }))
+            renderer.addTable(headers: progHeader, rows: progRows, totalRow: progTotalRow)
+            renderer.addSpacing(16)
+        }
+
         // Cost by Initiative
         renderer.addHeading("Cost by Initiative")
         var header = ["Initiative"] + years.map(String.init) + ["Total"]
@@ -278,17 +299,14 @@ private class PDFRenderer {
             col == 0 ? firstColWidth : otherColWidth
         }
 
-        let rowHeight: CGFloat = 16
+        let rowHeight: CGFloat = 14
         let headerFont = NSFont.boldSystemFont(ofSize: 9)
         let cellFont = NSFont.systemFont(ofSize: 9)
         let boldCellFont = NSFont.boldSystemFont(ofSize: 9)
 
         // Header
         ensureSpace(rowHeight + 4)
-        for (i, h) in headers.enumerated() {
-            let alignment: NSTextAlignment = i == 0 ? .left : .right
-            drawText(h, font: headerFont, x: colX(i), maxWidth: colW(i) - 4, alignment: alignment, color: .secondaryLabelColor)
-        }
+        drawRow(cells: headers, font: headerFont, colX: colX, colW: colW, color: .secondaryLabelColor, height: rowHeight)
         y -= 2
         drawHLine()
         y -= 2
@@ -296,11 +314,7 @@ private class PDFRenderer {
         // Rows
         for row in rows {
             ensureSpace(rowHeight)
-            for (i, cell) in row.prefix(colCount).enumerated() {
-                let alignment: NSTextAlignment = i == 0 ? .left : .right
-                drawText(cell, font: cellFont, x: colX(i), maxWidth: colW(i) - 4, alignment: alignment)
-            }
-            y -= 1
+            drawRow(cells: row, font: cellFont, colX: colX, colW: colW, color: .labelColor, height: rowHeight)
         }
 
         // Total row
@@ -309,11 +323,29 @@ private class PDFRenderer {
             drawHLine()
             y -= 2
             ensureSpace(rowHeight)
-            for (i, cell) in totalRow.prefix(colCount).enumerated() {
-                let alignment: NSTextAlignment = i == 0 ? .left : .right
-                drawText(cell, font: boldCellFont, x: colX(i), maxWidth: colW(i) - 4, alignment: alignment)
-            }
+            drawRow(cells: totalRow, font: boldCellFont, colX: colX, colW: colW, color: .labelColor, height: rowHeight)
         }
+    }
+
+    /// Draws a single row of cells at the current `y`, with all cells aligned to the same baseline,
+    /// then advances `y` by `height` exactly once.
+    private func drawRow(
+        cells: [String],
+        font: NSFont,
+        colX: (Int) -> CGFloat,
+        colW: (Int) -> CGFloat,
+        color: NSColor,
+        height: CGFloat
+    ) {
+        let rowTop = y
+        for (i, cell) in cells.enumerated() {
+            let alignment: NSTextAlignment = i == 0 ? .left : .right
+            // Reset y to the row's top before each column so columns share a baseline.
+            y = rowTop
+            drawText(cell, font: font, x: colX(i), maxWidth: colW(i) - 4, alignment: alignment, color: color)
+        }
+        // Advance y by the nominal row height — independent of any individual cell's measured height.
+        y = rowTop - height
     }
 
     func finalize() -> Data {
