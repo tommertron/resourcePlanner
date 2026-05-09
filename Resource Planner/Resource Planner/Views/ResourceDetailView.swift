@@ -5,6 +5,7 @@ private let newRoleSentinel = UUID(uuidString: "00000000-0000-0000-0000-00000000
 struct ResourceDetailView: View {
     @Binding var resource: Resource
     @Binding var roles: [Role]
+    let teams: [Team]
     let plan: Plan?
     let displayCurrency: String
 
@@ -34,6 +35,29 @@ struct ResourceDetailView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+
+                if !teams.isEmpty {
+                    Picker("Team", selection: teamPickerBinding) {
+                        Text("None").tag(UUID?.none)
+                        ForEach(teams) { team in
+                            Text(team.name.isEmpty ? "Untitled team" : team.name)
+                                .tag(UUID?.some(team.id))
+                        }
+                    }
+                    if resource.isCustomTeam, let role = currentRole, role.defaultTeamID != nil, role.defaultTeamID != resource.teamID {
+                        HStack {
+                            Text("Custom team — overrides role default.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Spacer()
+                            Button("Reset to role default") {
+                                resource.adoptRoleTeamDefault(role)
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                        }
+                    }
+                }
             }
 
             Section {
@@ -178,6 +202,7 @@ struct ResourceDetailView: View {
                     roles.append(role)
                     resource.roleID = role.id
                     if !resource.isCustomRate { resource.adoptRoleDefaults(role) }
+                    if !resource.isCustomTeam { resource.adoptRoleTeamDefault(role) }
                 }
                 newRoleName = ""
             }
@@ -195,9 +220,22 @@ struct ResourceDetailView: View {
                     showingNewRoleSheet = true
                 } else {
                     resource.roleID = newValue
-                    if !resource.isCustomRate, let r = currentRole(for: newValue) {
-                        resource.adoptRoleDefaults(r)
+                    if let r = currentRole(for: newValue) {
+                        if !resource.isCustomRate { resource.adoptRoleDefaults(r) }
+                        if !resource.isCustomTeam { resource.adoptRoleTeamDefault(r) }
                     }
+                }
+            }
+        )
+    }
+
+    private var teamPickerBinding: Binding<UUID?> {
+        Binding(
+            get: { resource.teamID },
+            set: { newValue in
+                if newValue != resource.teamID {
+                    resource.teamID = newValue
+                    resource.isCustomTeam = true
                 }
             }
         )

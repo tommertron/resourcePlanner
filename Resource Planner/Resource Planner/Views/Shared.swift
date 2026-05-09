@@ -116,6 +116,7 @@ struct ResourceRow: View {
 struct RoleDetailView: View {
     @Binding var role: Role
     @Binding var resources: [Resource]
+    let teams: [Team]
     var onAddResource: ((UUID) -> Void)? = nil
 
     var body: some View {
@@ -123,6 +124,16 @@ struct RoleDetailView: View {
             Section("Role") {
                 TextField("Name", text: $role.name)
                     .textFieldStyle(.roundedBorder)
+
+                if !teams.isEmpty {
+                    Picker("Default Team", selection: $role.defaultTeamID) {
+                        Text("None").tag(UUID?.none)
+                        ForEach(teams) { team in
+                            Text(team.name.isEmpty ? "Untitled team" : team.name)
+                                .tag(UUID?.some(team.id))
+                        }
+                    }
+                }
             }
 
             Section("Default compensation") {
@@ -217,6 +228,7 @@ struct RoleDetailView: View {
                     var newResource = Resource(name: "")
                     newResource.roleID = role.id
                     newResource.adoptRoleDefaults(role)
+                    newResource.adoptRoleTeamDefault(role)
                     resources.append(newResource)
                     onAddResource?(newResource.id)
                 } label: {

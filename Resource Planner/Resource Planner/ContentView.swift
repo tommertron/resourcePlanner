@@ -3,6 +3,8 @@ import SwiftUI
 enum SidebarSelection: Hashable {
     case resource(UUID)
     case role(UUID)
+    case team(UUID)
+    case program(UUID)
     case initiative(UUID)
     case planning
     case reports
@@ -98,6 +100,54 @@ struct ContentView: View {
             }
 
             Section {
+                ForEach(document.planner.teams) { team in
+                    TeamSidebarRow(team: team, count: teamMemberCount(team.id))
+                        .tag(SidebarSelection.team(team.id))
+                        .contextMenu {
+                            Button("Delete", role: .destructive) {
+                                deleteTeam(team.id)
+                            }
+                        }
+                }
+                if document.planner.teams.isEmpty {
+                    Text("No teams yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                sectionHeader(title: "Teams", systemImage: "person.3.fill", help: "New team") {
+                    addTeam()
+                }
+            }
+
+            Section {
+                if let planIdx = baselinePlanIndex {
+                    ForEach(document.planner.plans[planIdx].programs) { program in
+                        ProgramSidebarRow(program: program, count: programInitiativeCount(program.id))
+                            .tag(SidebarSelection.program(program.id))
+                            .contextMenu {
+                                Button("Delete", role: .destructive) {
+                                    deleteProgram(program.id)
+                                }
+                            }
+                    }
+                    if document.planner.plans[planIdx].programs.isEmpty {
+                        Text("No programs yet")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("No programs yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                sectionHeader(title: "Programs", systemImage: "rectangle.stack.fill", help: "New program") {
+                    addProgram()
+                }
+            }
+
+            Section {
                 if let planIdx = baselinePlanIndex {
                     ForEach(document.planner.plans[planIdx].initiatives) { initiative in
                         InitiativeSidebarRow(initiative: initiative)
@@ -166,6 +216,7 @@ struct ContentView: View {
                 ResourceDetailView(
                     resource: $document.planner.resources[idx],
                     roles: $document.planner.roles,
+                    teams: document.planner.teams,
                     plan: baselinePlanIndex.map { document.planner.plans[$0] },
                     displayCurrency: document.planner.displayCurrency
                 )
@@ -176,8 +227,36 @@ struct ContentView: View {
                 RoleDetailView(
                     role: $document.planner.roles[idx],
                     resources: $document.planner.resources,
+                    teams: document.planner.teams,
                     onAddResource: { newID in
                         selection = .resource(newID)
+                    }
+                )
+            } else { emptyDetail }
+
+        case .team(let id):
+            if let idx = document.planner.teams.firstIndex(where: { $0.id == id }) {
+                TeamDetailView(
+                    team: $document.planner.teams[idx],
+                    resources: $document.planner.resources,
+                    roles: document.planner.roles,
+                    plan: baselinePlanIndex.map { document.planner.plans[$0] },
+                    displayCurrency: document.planner.displayCurrency,
+                    onSelectResource: { rid in selection = .resource(rid) }
+                )
+            } else { emptyDetail }
+
+        case .program(let id):
+            if let planIdx = baselinePlanIndex,
+               let progIdx = document.planner.plans[planIdx].programs.firstIndex(where: { $0.id == id }) {
+                ProgramDetailView(
+                    program: $document.planner.plans[planIdx].programs[progIdx],
+                    plan: $document.planner.plans[planIdx],
+                    resources: document.planner.resources,
+                    displayCurrency: document.planner.displayCurrency,
+                    conversionRates: document.planner.conversionRates,
+                    onSelectInitiative: { initiativeID in
+                        selection = .initiative(initiativeID)
                     }
                 )
             } else { emptyDetail }
@@ -268,6 +347,60 @@ struct ContentView: View {
         }
     }
 
+    private func addTeam() {
+        let new = Team(name: "")
+        DispatchQueue.main.async {
+            document.planner.teams.append(new)
+            selection = .team(new.id)
+        }
+    }
+
+    private func teamMemberCount(_ id: UUID) -> Int {
+        document.planner.resources.filter { $0.teamID == id }.count
+    }
+
+    private func deleteTeam(_ id: UUID) {
+        // Detach members
+        for i in document.planner.resources.indices where document.planner.resources[i].teamID == id {
+            document.planner.resources[i].teamID = nil
+            document.planner.resources[i].isCustomTeam = false
+        }
+        // Clear from roles' defaults
+        for i in document.planner.roles.indices where document.planner.roles[i].defaultTeamID == id {
+            document.planner.roles[i].defaultTeamID = nil
+        }
+        document.planner.teams.removeAll { $0.id == id }
+        if selection == .team(id) { selection = nil }
+    }
+
+    private func addProgram() {
+        ensureBaselinePlan()
+        let today = Date()
+        let oneYearLater = Calendar.gregorianUTC.date(byAdding: .year, value: 1, to: today) ?? today
+        let new = Program(name: "", startDate: today, endDate: oneYearLater)
+        guard let planIdx = baselinePlanIndex else { return }
+        DispatchQueue.main.async {
+            document.planner.plans[planIdx].programs.append(new)
+            selection = .program(new.id)
+        }
+    }
+
+    private func programInitiativeCount(_ id: UUID) -> Int {
+        guard let planIdx = baselinePlanIndex else { return 0 }
+        return document.planner.plans[planIdx].initiatives.filter { $0.programID == id }.count
+    }
+
+    private func deleteProgram(_ id: UUID) {
+        guard let planIdx = baselinePlanIndex else { return }
+        // Detach any member initiatives — keep them but unset their programID.
+        for i in document.planner.plans[planIdx].initiatives.indices
+            where document.planner.plans[planIdx].initiatives[i].programID == id {
+            document.planner.plans[planIdx].initiatives[i].programID = nil
+        }
+        document.planner.plans[planIdx].programs.removeAll { $0.id == id }
+        if selection == .program(id) { selection = nil }
+    }
+
     private func deleteInitiative(_ id: UUID) {
         guard let planIdx = baselinePlanIndex else { return }
         document.planner.plans[planIdx].initiatives.removeAll { $0.id == id }
@@ -289,6 +422,48 @@ private struct RoleSidebarRow: View {
                 Text(role.name.isEmpty ? "Untitled role" : role.name)
                     .foregroundStyle(role.name.isEmpty ? .secondary : .primary)
                 Text("\(count) \(count == 1 ? "resource" : "resources")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct TeamSidebarRow: View {
+    let team: Team
+    let count: Int
+
+    var body: some View {
+        HStack {
+            Image(systemName: team.icon)
+                .foregroundStyle(team.color.swiftUIColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(team.name.isEmpty ? "Untitled team" : team.name)
+                    .foregroundStyle(team.name.isEmpty ? .secondary : .primary)
+                Text("\(count) \(count == 1 ? "member" : "members")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct ProgramSidebarRow: View {
+    let program: Program
+    let count: Int
+
+    var body: some View {
+        HStack {
+            Image(systemName: program.icon)
+                .foregroundStyle(program.color.swiftUIColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(program.name.isEmpty ? "Untitled program" : program.name)
+                    .foregroundStyle(program.name.isEmpty ? .secondary : .primary)
+                Text("\(count) \(count == 1 ? "initiative" : "initiatives")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

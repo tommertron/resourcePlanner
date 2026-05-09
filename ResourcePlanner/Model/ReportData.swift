@@ -395,6 +395,53 @@ enum ReportData {
         }.sorted { $0.totalCost > $1.totalCost }
     }
 
+    // MARK: - Program rollups
+
+    struct ProgramCostEntry: Identifiable {
+        let id: UUID
+        let name: String
+        let color: InitiativeColor
+        let icon: String
+        let costByYear: [Int: Double]
+        let initiativeCount: Int
+        var totalCost: Double { costByYear.values.reduce(0, +) }
+    }
+
+    /// Yearly cost rollup for each program, summing all member-initiative costs (people + other costs).
+    /// Includes a synthetic "(No Program)" entry for initiatives without a program if any exist.
+    static func programYearlyCosts(plan: Plan, resources: [Resource], currencyContext: CurrencyContext = .identity) -> [ProgramCostEntry] {
+        let noProgramID = UUID(uuidString: "00000000-0000-0000-0000-EEEEEEEEEEEE")!
+        var byProgramYear: [UUID: [Int: Double]] = [:]
+        var countByProgram: [UUID: Int] = [:]
+        for initiative in plan.initiatives {
+            let key = initiative.programID ?? noProgramID
+            countByProgram[key, default: 0] += 1
+            let yearly = initiativeYearlyCosts(initiative: initiative, plan: plan, resources: resources, currencyContext: currencyContext)
+            for (year, split) in yearly {
+                byProgramYear[key, default: [:]][year, default: 0] += split.total
+            }
+            for (year, amount) in otherCostsByYear(initiative: initiative, currencyContext: currencyContext) {
+                byProgramYear[key, default: [:]][year, default: 0] += amount
+            }
+        }
+        let programByID = Dictionary(uniqueKeysWithValues: plan.programs.map { ($0.id, $0) })
+        return byProgramYear.compactMap { (programID, yearCosts) in
+            if programID == noProgramID {
+                guard (countByProgram[noProgramID] ?? 0) > 0 else { return nil }
+                return ProgramCostEntry(
+                    id: noProgramID, name: "(No Program)", color: .brown, icon: "questionmark.square.dashed",
+                    costByYear: yearCosts, initiativeCount: countByProgram[noProgramID] ?? 0
+                )
+            }
+            guard let program = programByID[programID] else { return nil }
+            return ProgramCostEntry(
+                id: program.id, name: program.name.isEmpty ? "Untitled Program" : program.name,
+                color: program.color, icon: program.icon,
+                costByYear: yearCosts, initiativeCount: countByProgram[programID] ?? 0
+            )
+        }.sorted { $0.totalCost > $1.totalCost }
+    }
+
     /// Total plan cost across all initiatives.
     static func totalPlanCost(plan: Plan, resources: [Resource], excludedResourceIDs: Set<UUID> = [], currencyContext: CurrencyContext = .identity) -> Double {
         let months = allActiveMonths(plan: plan)

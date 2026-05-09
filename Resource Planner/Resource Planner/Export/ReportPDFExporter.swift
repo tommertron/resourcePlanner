@@ -29,6 +29,27 @@ enum ReportPDFExporter {
         let renderer = PDFRenderer(title: "\(plan.name) — Overview Report")
         let years = ReportData.allActiveYears(plan: plan)
 
+        // Cost by Program (top of report)
+        let programEntries = ReportData.programYearlyCosts(plan: plan, resources: resources, currencyContext: ctx)
+        if !programEntries.isEmpty {
+            renderer.addHeading("Cost by Program")
+            let progHeader = ["Program"] + years.map(String.init) + ["Total"]
+            var progRows: [[String]] = []
+            for entry in programEntries {
+                var row = ["\(entry.name) (\(entry.initiativeCount))"]
+                for year in years { row.append(cur(entry.costByYear[year] ?? 0)) }
+                row.append(cur(entry.totalCost))
+                progRows.append(row)
+            }
+            var progTotalRow = ["Total"]
+            for year in years {
+                progTotalRow.append(cur(programEntries.reduce(0) { $0 + ($1.costByYear[year] ?? 0) }))
+            }
+            progTotalRow.append(cur(programEntries.reduce(0) { $0 + $1.totalCost }))
+            renderer.addTable(headers: progHeader, rows: progRows, totalRow: progTotalRow)
+            renderer.addSpacing(16)
+        }
+
         // Cost by Initiative
         renderer.addHeading("Cost by Initiative")
         var header = ["Initiative"] + years.map(String.init) + ["Total"]

@@ -118,21 +118,79 @@ struct ReportsView: View {
             }
         }
 
-        showExportSavePanel(title: "Export Report", defaultName: defaultName, format: format) { url in
-            guard let url else { return }
-            try? data.write(to: url)
-        }
+        exportData(data, title: "Export Report", defaultName: defaultName, format: format)
     }
 
     // MARK: - Overview tab content
 
     private var overviewContent: some View {
         VStack(alignment: .leading, spacing: 24) {
+            costByProgramSection
+            Divider()
             costByInitiativeSection
             Divider()
             committedVsPlaceholderSection
             Divider()
             placeholderImpactSection
+        }
+    }
+
+    private var costByProgramSection: some View {
+        let programEntries = ReportData.programYearlyCosts(plan: plan, resources: resources, currencyContext: currencyContext)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Cost by Program")
+                .font(.title3).bold()
+            if programEntries.isEmpty {
+                Text("No programs to show.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                    GridRow {
+                        Text("Program").bold()
+                        ForEach(years, id: \.self) { y in
+                            Text(String(y)).bold().gridColumnAlignment(.trailing)
+                        }
+                        Text("Total").bold().gridColumnAlignment(.trailing)
+                    }
+                    Divider()
+                    ForEach(programEntries) { entry in
+                        GridRow {
+                            HStack(spacing: 6) {
+                                Image(systemName: entry.icon)
+                                    .foregroundStyle(entry.color.swiftUIColor)
+                                Text(entry.name)
+                                Text("(\(entry.initiativeCount))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            ForEach(years, id: \.self) { y in
+                                Text(entry.costByYear[y] ?? 0,
+                                     format: .currency(code: displayCurrency).precision(.fractionLength(0)))
+                                    .monospacedDigit()
+                                    .gridColumnAlignment(.trailing)
+                            }
+                            Text(entry.totalCost,
+                                 format: .currency(code: displayCurrency).precision(.fractionLength(0)))
+                                .monospacedDigit().bold()
+                                .gridColumnAlignment(.trailing)
+                        }
+                    }
+                    Divider()
+                    GridRow {
+                        Text("Total").bold()
+                        ForEach(years, id: \.self) { y in
+                            Text(programEntries.reduce(0) { $0 + ($1.costByYear[y] ?? 0) },
+                                 format: .currency(code: displayCurrency).precision(.fractionLength(0)))
+                                .bold().monospacedDigit()
+                                .gridColumnAlignment(.trailing)
+                        }
+                        Text(programEntries.reduce(0) { $0 + $1.totalCost },
+                             format: .currency(code: displayCurrency).precision(.fractionLength(0)))
+                            .bold().monospacedDigit()
+                            .gridColumnAlignment(.trailing)
+                    }
+                }
+            }
         }
     }
 

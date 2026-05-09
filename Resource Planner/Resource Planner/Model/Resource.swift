@@ -10,13 +10,43 @@ nonisolated public enum EmploymentType: String, Codable, CaseIterable, Identifia
     public var id: String { rawValue }
 }
 
-nonisolated public struct Role: Codable, Hashable, Identifiable, Sendable {
+/// A team that resources belong to. Document-wide, like Role. Roles may declare a default team
+/// which is adopted by a resource when the role is assigned (gated by `Resource.isCustomTeam`).
+nonisolated public struct Team: Codable, Hashable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var color: InitiativeColor
+    public var icon: String
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        color: InitiativeColor = .teal,
+        icon: String = "person.3.fill"
+    ) {
+        self.id = id
+        self.name = name
+        self.color = color
+        self.icon = icon
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        color = try c.decodeIfPresent(InitiativeColor.self, forKey: .color) ?? .teal
+        icon = try c.decodeIfPresent(String.self, forKey: .icon) ?? "person.3.fill"
+    }
+}
+
+nonisolated public struct Role: Hashable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var defaultRate: Double
     public var defaultRateBasis: RateBasis
     public var defaultHoursPerWeek: Double
     public var currencyCode: String
+    public var defaultTeamID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -24,7 +54,8 @@ nonisolated public struct Role: Codable, Hashable, Identifiable, Sendable {
         defaultRate: Double = 0,
         defaultRateBasis: RateBasis = .annual,
         defaultHoursPerWeek: Double = 40,
-        currencyCode: String = "USD"
+        currencyCode: String = "USD",
+        defaultTeamID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -32,6 +63,13 @@ nonisolated public struct Role: Codable, Hashable, Identifiable, Sendable {
         self.defaultRateBasis = defaultRateBasis
         self.defaultHoursPerWeek = defaultHoursPerWeek
         self.currencyCode = currencyCode
+        self.defaultTeamID = defaultTeamID
+    }
+}
+
+extension Role: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, defaultRate, defaultRateBasis, defaultHoursPerWeek, currencyCode, defaultTeamID
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,6 +80,18 @@ nonisolated public struct Role: Codable, Hashable, Identifiable, Sendable {
         defaultRateBasis = try container.decode(RateBasis.self, forKey: .defaultRateBasis)
         defaultHoursPerWeek = try container.decode(Double.self, forKey: .defaultHoursPerWeek)
         currencyCode = try container.decodeIfPresent(String.self, forKey: .currencyCode) ?? "USD"
+        defaultTeamID = try container.decodeIfPresent(UUID.self, forKey: .defaultTeamID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(defaultRate, forKey: .defaultRate)
+        try c.encode(defaultRateBasis, forKey: .defaultRateBasis)
+        try c.encode(defaultHoursPerWeek, forKey: .defaultHoursPerWeek)
+        try c.encode(currencyCode, forKey: .currencyCode)
+        try c.encodeIfPresent(defaultTeamID, forKey: .defaultTeamID)
     }
 
     /// Cost per month implied by the role's defaults (matches Resource.monthlyCost math).
@@ -54,7 +104,7 @@ nonisolated public struct Role: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
+nonisolated public struct Resource: Hashable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var roleID: UUID?
@@ -65,6 +115,9 @@ nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
     /// True if the user has explicitly set this resource's rate so it shouldn't be auto-overwritten by a role default.
     public var isCustomRate: Bool
     public var currencyCode: String
+    public var teamID: UUID?
+    /// True if the user has explicitly set this resource's team so it shouldn't be auto-overwritten by a role default.
+    public var isCustomTeam: Bool
 
     public init(
         id: UUID = UUID(),
@@ -75,7 +128,9 @@ nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
         rateBasis: RateBasis = .annual,
         hoursPerWeek: Double = 40,
         isCustomRate: Bool = false,
-        currencyCode: String = "USD"
+        currencyCode: String = "USD",
+        teamID: UUID? = nil,
+        isCustomTeam: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -86,6 +141,15 @@ nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
         self.hoursPerWeek = hoursPerWeek
         self.isCustomRate = isCustomRate
         self.currencyCode = currencyCode
+        self.teamID = teamID
+        self.isCustomTeam = isCustomTeam
+    }
+}
+
+extension Resource: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, roleID, employmentType, rate, rateBasis, hoursPerWeek, isCustomRate, currencyCode
+        case teamID, isCustomTeam
     }
 
     public init(from decoder: Decoder) throws {
@@ -99,6 +163,23 @@ nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
         hoursPerWeek = try container.decode(Double.self, forKey: .hoursPerWeek)
         isCustomRate = try container.decode(Bool.self, forKey: .isCustomRate)
         currencyCode = try container.decodeIfPresent(String.self, forKey: .currencyCode) ?? "USD"
+        teamID = try container.decodeIfPresent(UUID.self, forKey: .teamID)
+        isCustomTeam = try container.decodeIfPresent(Bool.self, forKey: .isCustomTeam) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(roleID, forKey: .roleID)
+        try c.encode(employmentType, forKey: .employmentType)
+        try c.encode(rate, forKey: .rate)
+        try c.encode(rateBasis, forKey: .rateBasis)
+        try c.encode(hoursPerWeek, forKey: .hoursPerWeek)
+        try c.encode(isCustomRate, forKey: .isCustomRate)
+        try c.encode(currencyCode, forKey: .currencyCode)
+        try c.encodeIfPresent(teamID, forKey: .teamID)
+        try c.encode(isCustomTeam, forKey: .isCustomTeam)
     }
 
     /// Cost per month for 100% allocation, normalized across rate bases.
@@ -127,5 +208,12 @@ nonisolated public struct Resource: Codable, Hashable, Identifiable, Sendable {
         hoursPerWeek = role.defaultHoursPerWeek
         currencyCode = role.currencyCode
         isCustomRate = false
+    }
+
+    /// Adopt the role's default team for this resource (only if not custom).
+    /// Caller is responsible for checking `isCustomTeam` before calling.
+    public mutating func adoptRoleTeamDefault(_ role: Role) {
+        teamID = role.defaultTeamID
+        isCustomTeam = false
     }
 }
