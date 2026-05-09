@@ -395,6 +395,109 @@ enum ReportData {
         }.sorted { $0.totalCost > $1.totalCost }
     }
 
+    // MARK: - Team rollups
+
+    struct TeamBreakdownEntry: Identifiable {
+        let id: UUID
+        let name: String
+        let color: InitiativeColor
+        let icon: String
+        let costByYear: [Int: Double]
+        var totalCost: Double { costByYear.values.reduce(0, +) }
+    }
+
+    struct TeamRollup {
+        let totalCost: Double
+        let costByYear: [Int: Double]
+        let byRole: [TeamBreakdownEntry]
+        let byInitiative: [TeamBreakdownEntry]
+        let byProgram: [TeamBreakdownEntry]
+    }
+
+    /// Aggregate plan costs filtered to resources on the given team.
+    static func teamRollup(
+        team: Team,
+        plan: Plan,
+        resources: [Resource],
+        roles: [Role],
+        currencyContext: CurrencyContext = .identity
+    ) -> TeamRollup {
+        let memberIDs = Set(resources.filter { $0.teamID == team.id }.map(\.id))
+        let months = allActiveMonths(plan: plan)
+        let noRoleID = UUID(uuidString: "00000000-0000-0000-0000-FFFFFFFFFFFF")!
+        let noProgramID = UUID(uuidString: "00000000-0000-0000-0000-EEEEEEEEEEEE")!
+
+        var byYear: [Int: Double] = [:]
+        var byRoleYear: [UUID: [Int: Double]] = [:]
+        var byInitYear: [UUID: [Int: Double]] = [:]
+        var byProgramYear: [UUID: [Int: Double]] = [:]
+        var total = 0.0
+
+        guard !memberIDs.isEmpty, !months.isEmpty else {
+            return TeamRollup(totalCost: 0, costByYear: [:], byRole: [], byInitiative: [], byProgram: [])
+        }
+
+        let resourceByID = Dictionary(uniqueKeysWithValues: resources.map { ($0.id, $0) })
+        let initiativeByID = Dictionary(uniqueKeysWithValues: plan.initiatives.map { ($0.id, $0) })
+
+        for assignment in plan.assignments {
+            guard let initiative = initiativeByID[assignment.initiativeID] else { continue }
+            for allocation in assignment.allocations where memberIDs.contains(allocation.resourceID) {
+                guard let resource = resourceByID[allocation.resourceID] else { continue }
+                let roleKey = resource.roleID ?? noRoleID
+                let programKey = initiative.programID ?? noProgramID
+                for mk in months {
+                    let pct = allocation.months[mk] ?? 0
+                    guard pct > 0 else { continue }
+                    let cost = currencyContext.convert(resource.monthlyCost * pct, from: resource.currencyCode)
+                    total += cost
+                    byYear[mk.year, default: 0] += cost
+                    byRoleYear[roleKey, default: [:]][mk.year, default: 0] += cost
+                    byInitYear[initiative.id, default: [:]][mk.year, default: 0] += cost
+                    byProgramYear[programKey, default: [:]][mk.year, default: 0] += cost
+                }
+            }
+        }
+
+        let rolesByID = Dictionary(uniqueKeysWithValues: roles.map { ($0.id, $0) })
+        let programsByID = Dictionary(uniqueKeysWithValues: plan.programs.map { ($0.id, $0) })
+
+        let byRoleEntries: [TeamBreakdownEntry] = byRoleYear.map { (rid, yc) in
+            let name = rid == noRoleID ? "No Role" : (rolesByID[rid]?.name ?? "Unknown Role")
+            return TeamBreakdownEntry(id: rid, name: name.isEmpty ? "Untitled role" : name,
+                                      color: .purple, icon: "tag.fill", costByYear: yc)
+        }.sorted { $0.totalCost > $1.totalCost }
+
+        let byInitEntries: [TeamBreakdownEntry] = byInitYear.map { (iid, yc) in
+            let init_ = initiativeByID[iid]
+            return TeamBreakdownEntry(
+                id: iid,
+                name: (init_?.name.isEmpty == false ? init_!.name : "Untitled initiative"),
+                color: init_?.color ?? .blue,
+                icon: init_?.icon ?? "flag.fill",
+                costByYear: yc
+            )
+        }.sorted { $0.totalCost > $1.totalCost }
+
+        let byProgramEntries: [TeamBreakdownEntry] = byProgramYear.map { (pid, yc) in
+            if pid == noProgramID {
+                return TeamBreakdownEntry(id: pid, name: "(No Program)", color: .brown,
+                                          icon: "questionmark.square.dashed", costByYear: yc)
+            }
+            let p = programsByID[pid]
+            return TeamBreakdownEntry(
+                id: pid,
+                name: (p?.name.isEmpty == false ? p!.name : "Untitled program"),
+                color: p?.color ?? .indigo,
+                icon: p?.icon ?? "rectangle.stack.fill",
+                costByYear: yc
+            )
+        }.sorted { $0.totalCost > $1.totalCost }
+
+        return TeamRollup(totalCost: total, costByYear: byYear,
+                          byRole: byRoleEntries, byInitiative: byInitEntries, byProgram: byProgramEntries)
+    }
+
     // MARK: - Program rollups
 
     struct ProgramCostEntry: Identifiable {
