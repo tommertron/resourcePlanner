@@ -13,6 +13,10 @@ ResourcePlanner lets you model the people, roles, teams, and initiatives that ma
 - **Reports** — overview report rolls up cost by program, by initiative, committed vs. placeholder, and placeholder impact. Resource allocation report breaks down by role and by resource. Per-initiative reports include ROI when expected returns are set.
 - **Exports** — every report exports to PDF, CSV, or JSON. Errors surface as dialogs rather than disappearing silently.
 
+## Get the App
+
+You can download the latest stable release over at the [official page](https://coefficiencies.com/apps/resourceplanner/) for the application.
+
 ## Building
 
 The Xcode app and a SwiftPM package share the model layer. The package exists primarily to keep XCTest fast.

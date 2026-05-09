@@ -17,6 +17,8 @@ Package.resolved
 # Distribution artifacts
 *.zip
 *.xcarchive/
+*.dmg
+*.DMG
 
 # Acorn source files
 *.acorn
