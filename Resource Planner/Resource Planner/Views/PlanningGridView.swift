@@ -339,7 +339,7 @@ struct PlanningGridView: View {
                     addAssignment(to: initiative.id)
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(initiative.color.swiftUIColor)
+                        .foregroundStyle(.blue)
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
