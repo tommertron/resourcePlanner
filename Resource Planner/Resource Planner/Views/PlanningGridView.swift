@@ -20,7 +20,9 @@ private let defaultFrozenColumnWidth: CGFloat = 120
 private let minFrozenColumnWidth: CGFloat = 80
 private let maxFrozenColumnWidth: CGFloat = 300
 private let monthlyCellWidth: CGFloat = 62
-private let rowHeight: CGFloat = 28
+private let baseRowHeight: CGFloat = 28
+private let baseCaptionSize: CGFloat = 11
+private let baseCaption2Size: CGFloat = 10
 
 // MARK: - PlanningGridView
 
@@ -38,6 +40,14 @@ struct PlanningGridView: View {
     @State private var collapsedInitiatives: Set<UUID> = []
     @State private var collapsedAssignments: Set<UUID> = []
     @State private var addingResourceToAssignment: UUID? = nil
+    @AppStorage("planningGridFontScale") private var fontScale: Double = 1.15
+
+    private var rowHeight: CGFloat { baseRowHeight * CGFloat(fontScale) }
+    private var captionFont: Font { .system(size: baseCaptionSize * CGFloat(fontScale)) }
+    private var captionBoldFont: Font { .system(size: baseCaptionSize * CGFloat(fontScale), weight: .bold) }
+    private var caption2Font: Font { .system(size: baseCaption2Size * CGFloat(fontScale)) }
+    private var caption2BoldFont: Font { .system(size: baseCaption2Size * CGFloat(fontScale), weight: .bold) }
+    private var caption2MonoFont: Font { .system(size: baseCaption2Size * CGFloat(fontScale)).monospacedDigit() }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -150,6 +160,20 @@ struct PlanningGridView: View {
 
             Spacer()
 
+            Menu {
+                Picker("Font size", selection: $fontScale) {
+                    Text("Small").tag(1.0)
+                    Text("Medium").tag(1.15)
+                    Text("Large").tag(1.3)
+                    Text("Extra Large").tag(1.5)
+                }
+            } label: {
+                Label("Font size", systemImage: "textformat.size")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Adjust planning view font size")
+
             Button {
                 showingNewAssignment = true
             } label: {
@@ -170,7 +194,7 @@ struct PlanningGridView: View {
                 VStack(spacing: 0) {
                     // Corner header
                     Text("Assignment / Resource")
-                        .font(.caption.bold())
+                        .font(captionBoldFont)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: rowHeight)
                         .padding(.leading, 4)
@@ -188,7 +212,7 @@ struct PlanningGridView: View {
                     // Capacity header
                     if !allocatedResourceIDs.isEmpty {
                         Text("Remaining Capacity")
-                            .font(.caption.bold())
+                            .font(captionBoldFont)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .frame(height: rowHeight)
                             .padding(.leading, 4)
@@ -200,7 +224,7 @@ struct PlanningGridView: View {
                                 Spacer().frame(width: 4)
                                 Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
                                 Text(resource.name.isEmpty ? "Untitled" : resource.name)
-                                    .font(.caption.bold())
+                                    .font(captionBoldFont)
                                     .lineLimit(1)
                                 Spacer()
                             }
@@ -293,7 +317,7 @@ struct PlanningGridView: View {
         HStack(spacing: 0) {
             ForEach(monthKeys, id: \.self) { mk in
                 Text(mk.shortLabel)
-                    .font(.caption2.bold())
+                    .font(caption2BoldFont)
                     .frame(width: monthlyCellWidth, height: rowHeight)
                     .background(Color(nsColor: .controlBackgroundColor))
             }
@@ -304,7 +328,7 @@ struct PlanningGridView: View {
 
     private func disclosureChevron(isExpanded: Bool) -> some View {
         Image(systemName: "chevron.right")
-            .font(.caption2)
+            .font(caption2Font)
             .foregroundStyle(.secondary)
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
             .animation(.easeInOut(duration: 0.15), value: isExpanded)
@@ -332,7 +356,7 @@ struct PlanningGridView: View {
                 .buttonStyle(.borderless)
                 Image(systemName: initiative.icon).foregroundStyle(initiative.color.swiftUIColor).frame(width: 14)
                 Text(initiative.name.isEmpty ? "Untitled initiative" : initiative.name)
-                    .font(.caption.bold())
+                    .font(captionBoldFont)
                     .lineLimit(1)
                 Spacer()
                 Button {
@@ -340,7 +364,7 @@ struct PlanningGridView: View {
                 } label: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(.blue)
-                        .font(.caption)
+                        .font(captionFont)
                 }
                 .buttonStyle(.borderless)
                 .help("Add assignment")
@@ -366,7 +390,7 @@ struct PlanningGridView: View {
                     }
                     Image(systemName: "doc.text.fill").foregroundStyle(.blue).frame(width: 14)
                     TextField("Assignment name", text: binding)
-                        .font(.caption)
+                        .font(captionFont)
                         .textFieldStyle(.plain)
                         .lineLimit(1)
                     Spacer()
@@ -375,7 +399,7 @@ struct PlanningGridView: View {
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(.blue)
-                            .font(.caption)
+                            .font(captionFont)
                     }
                     .buttonStyle(.borderless)
                     .help("Add resource")
@@ -396,7 +420,7 @@ struct PlanningGridView: View {
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .foregroundStyle(.red)
-                            .font(.caption)
+                            .font(captionFont)
                     }
                     .buttonStyle(.borderless)
                     .help("Delete assignment")
@@ -406,7 +430,7 @@ struct PlanningGridView: View {
                 Spacer().frame(width: 10) // aligns with chevron in parent rows
                 Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
                 Text(resourceName.isEmpty ? "Untitled" : resourceName)
-                    .font(.caption)
+                    .font(captionFont)
                     .lineLimit(1)
                 Spacer()
                 Button {
@@ -414,7 +438,7 @@ struct PlanningGridView: View {
                 } label: {
                     Image(systemName: "minus.circle.fill")
                         .foregroundStyle(.red)
-                        .font(.caption)
+                        .font(captionFont)
                 }
                 .buttonStyle(.borderless)
                 .help("Remove resource from assignment")
@@ -584,7 +608,7 @@ struct PlanningGridView: View {
         let capacityColor: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red : allocated > 0.5 ? .yellow : .green
         let capacityBG: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red.opacity(0.10) : allocated > 0.5 ? .yellow.opacity(0.08) : .green.opacity(0.08)
         return Text(allocated == 0 ? "" : "\(free)%")
-            .font(.caption2.monospacedDigit())
+            .font(caption2MonoFont)
             .foregroundStyle(allocated == 0 ? .secondary : capacityColor)
             .frame(width: width, height: rowHeight)
             .background(capacityBG)
