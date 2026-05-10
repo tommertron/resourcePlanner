@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Grid row model
 
 enum GridRowKind {
+    case program(Program)
     case initiative(Initiative)
     case assignment(Assignment)
     case allocation(assignmentID: UUID, allocationID: UUID)
@@ -39,6 +40,7 @@ struct PlanningGridView: View {
     @State private var userHasManuallyResized: Bool = false
     @State private var collapsedInitiatives: Set<UUID> = []
     @State private var collapsedAssignments: Set<UUID> = []
+    @State private var collapsedPrograms: Set<UUID> = []
     @State private var addingResourceToAssignment: UUID? = nil
     @AppStorage("planningGridFontScale") private var fontScale: Double = 1.15
 
@@ -63,6 +65,7 @@ struct PlanningGridView: View {
         }
         .onChange(of: plan.initiatives.count) { _, _ in autoFitColumnWidthIfNeeded() }
         .onChange(of: plan.assignments.count) { _, _ in autoFitColumnWidthIfNeeded() }
+        .onChange(of: plan.programs.count) { _, _ in autoFitColumnWidthIfNeeded() }
         .sheet(isPresented: $showingNewAssignment) {
             NewAssignmentSheetView(
                 initiatives: plan.initiatives,
@@ -103,23 +106,45 @@ struct PlanningGridView: View {
 
     private var gridRows: [PlanningRow] {
         var rows: [PlanningRow] = []
-        for initiative in plan.initiatives {
-            rows.append(PlanningRow(id: "init-\(initiative.id)", kind: .initiative(initiative), indentLevel: 0))
+        let groupingActive = !plan.programs.isEmpty
+        let programIDs = Set(plan.programs.map(\.id))
+
+        // When grouping is active, ungrouped initiatives (nil or stale programID) come first.
+        // When inactive, all initiatives are flat at indent 0 (legacy behavior).
+        let ungroupedInitiatives = plan.initiatives.filter { initiative in
+            guard let pid = initiative.programID else { return true }
+            return !programIDs.contains(pid)
+        }
+        appendInitiativeRows(ungroupedInitiatives, indent: 0, into: &rows)
+
+        guard groupingActive else { return rows }
+
+        for program in plan.programs {
+            rows.append(PlanningRow(id: "prog-\(program.id)", kind: .program(program), indentLevel: 0))
+            guard !collapsedPrograms.contains(program.id) else { continue }
+            let progInitiatives = plan.initiatives.filter { $0.programID == program.id }
+            appendInitiativeRows(progInitiatives, indent: 1, into: &rows)
+        }
+        return rows
+    }
+
+    private func appendInitiativeRows(_ initiatives: [Initiative], indent: Int, into rows: inout [PlanningRow]) {
+        for initiative in initiatives {
+            rows.append(PlanningRow(id: "init-\(initiative.id)", kind: .initiative(initiative), indentLevel: indent))
             guard !collapsedInitiatives.contains(initiative.id) else { continue }
             let initAssignments = plan.assignments.filter { $0.initiativeID == initiative.id }
             for assignment in initAssignments {
-                rows.append(PlanningRow(id: "assign-\(assignment.id)", kind: .assignment(assignment), indentLevel: 1))
+                rows.append(PlanningRow(id: "assign-\(assignment.id)", kind: .assignment(assignment), indentLevel: indent + 1))
                 guard !collapsedAssignments.contains(assignment.id) else { continue }
                 for allocation in assignment.allocations {
                     rows.append(PlanningRow(
                         id: "alloc-\(allocation.id)",
                         kind: .allocation(assignmentID: assignment.id, allocationID: allocation.id),
-                        indentLevel: 2
+                        indentLevel: indent + 2
                     ))
                 }
             }
         }
-        return rows
     }
 
     // MARK: - Toolbar
@@ -140,6 +165,7 @@ struct PlanningGridView: View {
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
+                    collapsedPrograms = Set(plan.programs.map(\.id))
                     collapsedInitiatives = Set(plan.initiatives.map(\.id))
                     collapsedAssignments = Set(plan.assignments.map(\.id))
                 }
@@ -150,6 +176,7 @@ struct PlanningGridView: View {
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
+                    collapsedPrograms.removeAll()
                     collapsedInitiatives.removeAll()
                     collapsedAssignments.removeAll()
                 }
@@ -346,6 +373,25 @@ struct PlanningGridView: View {
         HStack(spacing: 4) {
             Spacer().frame(width: CGFloat(row.indentLevel) * 12 + 4)
             switch row.kind {
+            case .program(let program):
+                let isExpanded = !collapsedPrograms.contains(program.id)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedPrograms.insert(program.id)
+                        } else {
+                            collapsedPrograms.remove(program.id)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: program.icon).foregroundStyle(program.color.swiftUIColor).frame(width: 14)
+                Text(program.name.isEmpty ? "Untitled program" : program.name)
+                    .font(captionBoldFont)
+                    .lineLimit(1)
+                Spacer()
             case .initiative(let initiative):
                 let isExpanded = !collapsedInitiatives.contains(initiative.id)
                 Button {
@@ -474,6 +520,13 @@ struct PlanningGridView: View {
     private func rowCells(_ row: PlanningRow) -> some View {
         HStack(spacing: 0) {
             switch row.kind {
+            case .program(let program):
+                ForEach(monthKeys, id: \.self) { _ in
+                    Rectangle()
+                        .fill(program.color.swiftUIColor.opacity(0.18))
+                        .frame(width: monthlyCellWidth, height: rowHeight)
+                        .border(.quaternary, width: 0.5)
+                }
             case .initiative(let initiative):
                 ForEach(monthKeys, id: \.self) { mk in
                     initiativeCell(initiative: initiative, monthKey: mk)
@@ -642,22 +695,29 @@ struct PlanningGridView: View {
 
     private func computeIdealColumnWidth() -> CGFloat {
         var maxChars = "Assignment / Resource".count
+        let groupingActive = !plan.programs.isEmpty
+        let extra = groupingActive ? 2 : 0 // initiatives indent one level deeper when grouped
+
+        for program in plan.programs {
+            let name = program.name.isEmpty ? "Untitled program" : program.name
+            maxChars = max(maxChars, name.count)
+        }
 
         for initiative in plan.initiatives {
             let name = initiative.name.isEmpty ? "Untitled initiative" : initiative.name
-            maxChars = max(maxChars, name.count)
+            maxChars = max(maxChars, name.count + extra)
         }
 
         for assignment in plan.assignments {
             let name = assignment.name.isEmpty ? "Assignment name" : assignment.name
-            maxChars = max(maxChars, name.count + 2) // indent offset
+            maxChars = max(maxChars, name.count + 2 + extra)
         }
 
         for assignment in plan.assignments {
             for allocation in assignment.allocations {
                 let name = resources.first(where: { $0.id == allocation.resourceID })?.name ?? "Unknown"
                 let displayName = name.isEmpty ? "Untitled" : name
-                maxChars = max(maxChars, displayName.count + 4) // double indent offset
+                maxChars = max(maxChars, displayName.count + 4 + extra)
             }
         }
 
