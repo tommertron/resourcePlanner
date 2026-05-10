@@ -188,9 +188,9 @@ struct PlanningGridView: View {
     // MARK: - Grid body (single horizontal scroll for alignment)
 
     private var gridBody: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // Frozen left column — pinned to exact width
-            ScrollView(.vertical, showsIndicators: false) {
+        ScrollView(.vertical, showsIndicators: true) {
+            HStack(alignment: .top, spacing: 0) {
+                // Frozen left column — no inner vertical scroll; shares the outer one
                 VStack(spacing: 0) {
                     // Corner header
                     Text("Assignment / Resource")
@@ -238,41 +238,39 @@ struct PlanningGridView: View {
                         Spacer().frame(height: 200)
                     }
                 }
-            }
-            .frame(width: effectiveColumnWidth)
-            .clipped()
-            .padding(.leading, 4)
+                .frame(width: effectiveColumnWidth)
+                .clipped()
+                .padding(.leading, 4)
 
-            // Draggable divider
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-                .overlay {
-                    Color.clear
-                        .frame(width: 8)
-                        .contentShape(Rectangle())
-                        .pointerStyle(.columnResize)
-                        .onTapGesture(count: 2) {
-                            userHasManuallyResized = false
-                            autoFitColumnWidthIfNeeded()
-                        }
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
-                                .updating($dragOffset) { value, state, _ in
-                                    state = value.translation.width
-                                }
-                                .onEnded { value in
-                                    let newWidth = CGFloat(liveColumnWidth) + value.translation.width
-                                    let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
-                                    liveColumnWidth = clamped
-                                    persistedColumnWidth = clamped
-                                    userHasManuallyResized = true
-                                }
-                        )
-                }
+                // Draggable divider
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .overlay {
+                        Color.clear
+                            .frame(width: 8)
+                            .contentShape(Rectangle())
+                            .pointerStyle(.columnResize)
+                            .onTapGesture(count: 2) {
+                                userHasManuallyResized = false
+                                autoFitColumnWidthIfNeeded()
+                            }
+                            .gesture(
+                                DragGesture(minimumDistance: 1)
+                                    .updating($dragOffset) { value, state, _ in
+                                        state = value.translation.width
+                                    }
+                                    .onEnded { value in
+                                        let newWidth = CGFloat(liveColumnWidth) + value.translation.width
+                                        let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
+                                        liveColumnWidth = clamped
+                                        persistedColumnWidth = clamped
+                                        userHasManuallyResized = true
+                                    }
+                            )
+                    }
 
-            // Scrollable right area — fills all remaining space
-            ScrollView(.vertical, showsIndicators: false) {
+                // Scrollable right area — only horizontal scroll here; vertical handled by outer
                 ScrollView(.horizontal, showsIndicators: true) {
                     VStack(spacing: 0) {
                         // Column headers
