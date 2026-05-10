@@ -190,52 +190,56 @@ struct PlanningGridView: View {
     private var gridBody: some View {
         ScrollView(.vertical, showsIndicators: true) {
             HStack(alignment: .top, spacing: 0) {
-                // Frozen left column — no inner vertical scroll; shares the outer one
-                VStack(spacing: 0) {
-                    // Corner header
-                    Text("Assignment / Resource")
-                        .font(captionBoldFont)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: rowHeight)
-                        .padding(.leading, 4)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                    Divider()
-
-                    // Row labels
-                    ForEach(gridRows) { row in
-                        rowLabel(row)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
-                        Divider()
-                    }
-
-                    // Capacity header
-                    if !allocatedResourceIDs.isEmpty {
-                        Text("Remaining Capacity")
-                            .font(captionBoldFont)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
-                            .padding(.leading, 4)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                        Divider()
-
-                        ForEach(allocatedResources) { resource in
-                            HStack(spacing: 4) {
-                                Spacer().frame(width: 4)
-                                Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
-                                Text(resource.name.isEmpty ? "Untitled" : resource.name)
-                                    .font(captionBoldFont)
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
+                // Frozen left column — no inner vertical scroll; shares the outer one.
+                // Section header pins to top via LazyVStack(pinnedViews:).
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        // Row labels
+                        ForEach(gridRows) { row in
+                            rowLabel(row)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
                             Divider()
                         }
-                    }
 
-                    if gridRows.isEmpty {
-                        Spacer().frame(height: 200)
+                        // Capacity header
+                        if !allocatedResourceIDs.isEmpty {
+                            Text("Remaining Capacity")
+                                .font(captionBoldFont)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
+                                .padding(.leading, 4)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                            Divider()
+
+                            ForEach(allocatedResources) { resource in
+                                HStack(spacing: 4) {
+                                    Spacer().frame(width: 4)
+                                    Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
+                                    Text(resource.name.isEmpty ? "Untitled" : resource.name)
+                                        .font(captionBoldFont)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
+                                Divider()
+                            }
+                        }
+
+                        if gridRows.isEmpty {
+                            Spacer().frame(height: 200)
+                        }
+                    } header: {
+                        VStack(spacing: 0) {
+                            Text("Assignment / Resource")
+                                .font(captionBoldFont)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
+                                .padding(.leading, 4)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                            Divider()
+                        }
                     }
                 }
                 .frame(width: effectiveColumnWidth)
@@ -270,38 +274,42 @@ struct PlanningGridView: View {
                             )
                     }
 
-                // Scrollable right area — only horizontal scroll here; vertical handled by outer
+                // Scrollable right area — only horizontal scroll here; vertical handled by outer.
+                // Section header (month columns) pins to top via LazyVStack(pinnedViews:).
                 ScrollView(.horizontal, showsIndicators: true) {
-                    VStack(spacing: 0) {
-                        // Column headers
-                        columnHeaders
-                        Divider()
-
-                        // Data rows
-                        ForEach(gridRows) { row in
-                            rowCells(row)
-                            Divider()
-                        }
-
-                        // Capacity rows
-                        if !allocatedResourceIDs.isEmpty {
-                            // Capacity section header (blank cells row)
-                            Color.clear.frame(width: gridContentWidth, height: rowHeight)
-                            Divider()
-
-                            ForEach(allocatedResources) { resource in
-                                capacityRow(resource)
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            // Data rows
+                            ForEach(gridRows) { row in
+                                rowCells(row)
                                 Divider()
                             }
-                        }
 
-                        if gridRows.isEmpty {
-                            ContentUnavailableView(
-                                "No Initiatives",
-                                systemImage: "flag",
-                                description: Text("Add initiatives from the sidebar, then create assignments here.")
-                            )
-                            .frame(width: gridContentWidth, height: 200)
+                            // Capacity rows
+                            if !allocatedResourceIDs.isEmpty {
+                                // Capacity section header (blank cells row)
+                                Color.clear.frame(width: gridContentWidth, height: rowHeight)
+                                Divider()
+
+                                ForEach(allocatedResources) { resource in
+                                    capacityRow(resource)
+                                    Divider()
+                                }
+                            }
+
+                            if gridRows.isEmpty {
+                                ContentUnavailableView(
+                                    "No Initiatives",
+                                    systemImage: "flag",
+                                    description: Text("Add initiatives from the sidebar, then create assignments here.")
+                                )
+                                .frame(width: gridContentWidth, height: 200)
+                            }
+                        } header: {
+                            VStack(spacing: 0) {
+                                columnHeaders
+                                Divider()
+                            }
                         }
                     }
                 }
