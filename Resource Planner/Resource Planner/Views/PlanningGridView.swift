@@ -502,17 +502,115 @@ struct PlanningGridView: View {
     @ViewBuilder
     private func rowContextMenu(_ row: PlanningRow) -> some View {
         switch row.kind {
+        case .program(let program):
+            Button("Move Up") { moveProgram(program.id, by: -1) }
+                .disabled(!canMoveProgram(program.id, by: -1))
+            Button("Move Down") { moveProgram(program.id, by: 1) }
+                .disabled(!canMoveProgram(program.id, by: 1))
+        case .initiative(let initiative):
+            Button("Move Up") { moveInitiative(initiative.id, by: -1) }
+                .disabled(!canMoveInitiative(initiative.id, by: -1))
+            Button("Move Down") { moveInitiative(initiative.id, by: 1) }
+                .disabled(!canMoveInitiative(initiative.id, by: 1))
         case .assignment(let assignment):
+            Button("Move Up") { moveAssignment(assignment.id, by: -1) }
+                .disabled(!canMoveAssignment(assignment.id, by: -1))
+            Button("Move Down") { moveAssignment(assignment.id, by: 1) }
+                .disabled(!canMoveAssignment(assignment.id, by: 1))
+            Divider()
             Button("Delete Assignment", role: .destructive) {
                 deleteAssignment(assignment.id)
             }
         case .allocation(let assignmentID, let allocationID):
+            Button("Move Up") { moveAllocation(allocationID, in: assignmentID, by: -1) }
+                .disabled(!canMoveAllocation(allocationID, in: assignmentID, by: -1))
+            Button("Move Down") { moveAllocation(allocationID, in: assignmentID, by: 1) }
+                .disabled(!canMoveAllocation(allocationID, in: assignmentID, by: 1))
+            Divider()
             Button("Remove Resource from Assignment", role: .destructive) {
                 removeAllocation(allocationID: allocationID, fromAssignment: assignmentID)
             }
-        default:
-            EmptyView()
         }
+    }
+
+    // MARK: - Reordering
+
+    private func moveProgram(_ id: UUID, by delta: Int) {
+        guard let i = plan.programs.firstIndex(where: { $0.id == id }) else { return }
+        let target = i + delta
+        guard plan.programs.indices.contains(target) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.programs.swapAt(i, target)
+        }
+    }
+
+    private func canMoveProgram(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.programs.firstIndex(where: { $0.id == id }) else { return false }
+        return plan.programs.indices.contains(i + delta)
+    }
+
+    /// Move an initiative within its sibling group (same programID, including nil).
+    private func moveInitiative(_ id: UUID, by delta: Int) {
+        guard let i = plan.initiatives.firstIndex(where: { $0.id == id }),
+              let swapWith = adjacentInitiativeIndex(from: i, by: delta) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.initiatives.swapAt(i, swapWith)
+        }
+    }
+
+    private func canMoveInitiative(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.initiatives.firstIndex(where: { $0.id == id }) else { return false }
+        return adjacentInitiativeIndex(from: i, by: delta) != nil
+    }
+
+    /// Find the next initiative index in the given direction with the same programID.
+    private func adjacentInitiativeIndex(from i: Int, by delta: Int) -> Int? {
+        let pid = plan.initiatives[i].programID
+        var j = i + (delta >= 0 ? 1 : -1)
+        while plan.initiatives.indices.contains(j) {
+            if plan.initiatives[j].programID == pid { return j }
+            j += (delta >= 0 ? 1 : -1)
+        }
+        return nil
+    }
+
+    private func moveAssignment(_ id: UUID, by delta: Int) {
+        guard let i = plan.assignments.firstIndex(where: { $0.id == id }),
+              let swapWith = adjacentAssignmentIndex(from: i, by: delta) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.assignments.swapAt(i, swapWith)
+        }
+    }
+
+    private func canMoveAssignment(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.assignments.firstIndex(where: { $0.id == id }) else { return false }
+        return adjacentAssignmentIndex(from: i, by: delta) != nil
+    }
+
+    private func adjacentAssignmentIndex(from i: Int, by delta: Int) -> Int? {
+        let initiativeID = plan.assignments[i].initiativeID
+        var j = i + (delta >= 0 ? 1 : -1)
+        while plan.assignments.indices.contains(j) {
+            if plan.assignments[j].initiativeID == initiativeID { return j }
+            j += (delta >= 0 ? 1 : -1)
+        }
+        return nil
+    }
+
+    private func moveAllocation(_ allocationID: UUID, in assignmentID: UUID, by delta: Int) {
+        guard let ai = plan.assignments.firstIndex(where: { $0.id == assignmentID }),
+              let li = plan.assignments[ai].allocations.firstIndex(where: { $0.id == allocationID }) else { return }
+        let target = li + delta
+        guard plan.assignments[ai].allocations.indices.contains(target) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.assignments[ai].allocations.swapAt(li, target)
+        }
+    }
+
+    private func canMoveAllocation(_ allocationID: UUID, in assignmentID: UUID, by delta: Int) -> Bool {
+        guard let ai = plan.assignments.firstIndex(where: { $0.id == assignmentID }),
+              let li = plan.assignments[ai].allocations.firstIndex(where: { $0.id == allocationID }) else { return false }
+        return plan.assignments[ai].allocations.indices.contains(li + delta)
     }
 
     // MARK: - Row cells
