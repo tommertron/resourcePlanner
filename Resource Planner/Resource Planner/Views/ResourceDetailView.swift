@@ -68,12 +68,15 @@ struct ResourceDetailView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Picker("Currency", selection: currencyBinding) {
+                Picker("Currency", selection: $resource.currencyCode) {
                     ForEach(SupportedCurrency.allCases) { c in
                         Text(c.rawValue).tag(c.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: resource.currencyCode) { _, _ in
+                    resource.isCustomRate = true
+                }
 
                 LabeledContent(rateLabel) {
                     TextField("", value: rateBinding,
@@ -311,17 +314,6 @@ struct ResourceDetailView: View {
         return "\(s) \(role.defaultRateBasis.displayName.lowercased())"
     }
 
-    private var currencyBinding: Binding<String> {
-        Binding(
-            get: { resource.currencyCode },
-            set: { newValue in
-                if newValue != resource.currencyCode {
-                    resource.currencyCode = newValue
-                    resource.isCustomRate = true
-                }
-            }
-        )
-    }
 }
 
 // MARK: - Resource allocation lookup
