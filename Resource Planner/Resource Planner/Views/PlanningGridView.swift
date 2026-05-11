@@ -659,6 +659,8 @@ struct PlanningGridView: View {
                             monthKey: mk,
                             tintColor: initiative?.color.swiftUIColor,
                             columnIndex: idx,
+                            rowHeight: rowHeight,
+                            valueFont: captionFont.monospacedDigit(),
                             onDragFill: { sourceCol, delta, phase in
                                 handleDragFill(
                                     assignmentID: assignmentID,
