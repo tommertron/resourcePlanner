@@ -15,6 +15,20 @@ struct PlanningRow: Identifiable {
     let indentLevel: Int
 }
 
+// MARK: - Capacity row model
+
+enum CapacityRowKind {
+    case team(team: Team?, resources: [Resource])
+    case role(team: Team?, role: Role?, resources: [Resource])
+    case resource(Resource)
+}
+
+struct CapacityPlanningRow: Identifiable {
+    let id: String
+    let kind: CapacityRowKind
+    let indentLevel: Int
+}
+
 // MARK: - Constants
 
 private let defaultFrozenColumnWidth: CGFloat = 120
@@ -30,6 +44,8 @@ private let baseCaption2Size: CGFloat = 10
 struct PlanningGridView: View {
     @Binding var plan: Plan
     @Binding var resources: [Resource]
+    let teams: [Team]
+    let roles: [Role]
 
     @State private var rangeStart: Date = Date()
     @State private var rangeEnd: Date = Calendar.gregorianUTC.date(byAdding: .month, value: 3, to: Date()) ?? Date()
@@ -41,6 +57,8 @@ struct PlanningGridView: View {
     @State private var collapsedInitiatives: Set<UUID> = []
     @State private var collapsedAssignments: Set<UUID> = []
     @State private var collapsedPrograms: Set<UUID> = []
+    @State private var collapsedCapacityTeams: Set<String> = []  // team UUID string or "no-team"
+    @State private var collapsedCapacityRoles: Set<String> = []  // "<teamKey>/<roleKey>"
     @State private var addingResourceToAssignment: UUID? = nil
     @State private var horizontalScrollOffset: CGFloat = 0
     @AppStorage("planningGridFontScale") private var fontScale: Double = 1.15
@@ -146,6 +164,96 @@ struct PlanningGridView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Capacity rows (Team → Role → Resource)
+
+    /// Always include every resource — not just those with assignments. Resources are
+    /// grouped by team (with a "No Team" bucket for teamID == nil), then by role
+    /// inside each team (with a "No Role" bucket for roleID == nil).
+    private var capacityRows: [CapacityPlanningRow] {
+        guard !resources.isEmpty else { return [] }
+
+        // Group resources by team
+        let byTeam: [UUID?: [Resource]] = Dictionary(grouping: resources, by: \.teamID)
+
+        // Order: real teams (sorted by name) that have at least one resource, then "No Team" if any.
+        let teamIDsWithResources = Set(byTeam.keys.compactMap { $0 })
+        let orderedTeams: [Team] = teams
+            .filter { teamIDsWithResources.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        var rows: [CapacityPlanningRow] = []
+
+        for team in orderedTeams {
+            let teamResources = byTeam[team.id] ?? []
+            appendTeamRows(team: team, teamKey: team.id.uuidString, teamResources: teamResources, into: &rows)
+        }
+
+        if let untagged = byTeam[nil], !untagged.isEmpty {
+            appendTeamRows(team: nil, teamKey: "no-team", teamResources: untagged, into: &rows)
+        }
+
+        return rows
+    }
+
+    private func appendTeamRows(team: Team?, teamKey: String, teamResources: [Resource], into rows: inout [CapacityPlanningRow]) {
+        rows.append(CapacityPlanningRow(
+            id: "capteam-\(teamKey)",
+            kind: .team(team: team, resources: teamResources),
+            indentLevel: 0
+        ))
+        guard !collapsedCapacityTeams.contains(teamKey) else { return }
+
+        let byRole: [UUID?: [Resource]] = Dictionary(grouping: teamResources, by: \.roleID)
+        let roleIDsWithResources = Set(byRole.keys.compactMap { $0 })
+        let orderedRoles: [Role] = roles
+            .filter { roleIDsWithResources.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        for role in orderedRoles {
+            let roleKey = "\(teamKey)/\(role.id.uuidString)"
+            let roleResources = (byRole[role.id] ?? [])
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            rows.append(CapacityPlanningRow(
+                id: "caprole-\(roleKey)",
+                kind: .role(team: team, role: role, resources: roleResources),
+                indentLevel: 1
+            ))
+            guard !collapsedCapacityRoles.contains(roleKey) else { continue }
+            for resource in roleResources {
+                rows.append(CapacityPlanningRow(
+                    id: "capres-\(roleKey)-\(resource.id.uuidString)",
+                    kind: .resource(resource),
+                    indentLevel: 2
+                ))
+            }
+        }
+
+        if let untaggedRole = byRole[nil], !untaggedRole.isEmpty {
+            let roleKey = "\(teamKey)/no-role"
+            let sorted = untaggedRole.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            rows.append(CapacityPlanningRow(
+                id: "caprole-\(roleKey)",
+                kind: .role(team: team, role: nil, resources: sorted),
+                indentLevel: 1
+            ))
+            guard !collapsedCapacityRoles.contains(roleKey) else { return }
+            for resource in sorted {
+                rows.append(CapacityPlanningRow(
+                    id: "capres-\(roleKey)-\(resource.id.uuidString)",
+                    kind: .resource(resource),
+                    indentLevel: 2
+                ))
+            }
+        }
+    }
+
+    /// Average allocation (0.0 — 1.0+) across the given resources for a given month.
+    private func avgAllocation(for resources: [Resource], in monthKey: MonthKey) -> Double {
+        guard !resources.isEmpty else { return 0 }
+        let total = resources.reduce(0.0) { $0 + plan.monthAllocation(for: $1.id, in: monthKey) }
+        return total / Double(resources.count)
     }
 
     // MARK: - Toolbar
@@ -255,8 +363,8 @@ struct PlanningGridView: View {
                             Divider()
                         }
 
-                        // Capacity header
-                        if !allocatedResourceIDs.isEmpty {
+                        // Capacity header + grouped rows (Team → Role → Resource)
+                        if !capacityRows.isEmpty {
                             Text("Remaining Capacity")
                                 .font(captionBoldFont)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -265,17 +373,10 @@ struct PlanningGridView: View {
                                 .background(Color(nsColor: .controlBackgroundColor))
                             Divider()
 
-                            ForEach(allocatedResources) { resource in
-                                HStack(spacing: 4) {
-                                    Spacer().frame(width: 4)
-                                    Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
-                                    Text(resource.name.isEmpty ? "Untitled" : resource.name)
-                                        .font(captionBoldFont)
-                                        .lineLimit(1)
-                                    Spacer()
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .frame(height: rowHeight)
+                            ForEach(capacityRows) { row in
+                                capacityRowLabel(row)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(height: rowHeight)
                                 Divider()
                             }
                         }
@@ -324,12 +425,12 @@ struct PlanningGridView: View {
                                 Divider()
                             }
 
-                            if !allocatedResourceIDs.isEmpty {
+                            if !capacityRows.isEmpty {
                                 Color.clear.frame(width: gridContentWidth, height: rowHeight)
                                 Divider()
 
-                                ForEach(allocatedResources) { resource in
-                                    capacityRow(resource)
+                                ForEach(capacityRows) { row in
+                                    capacityRowCells(row)
                                     Divider()
                                 }
                             }
@@ -761,23 +862,92 @@ struct PlanningGridView: View {
         return plan.initiatives.first(where: { $0.id == assignment.initiativeID })
     }
 
-    // MARK: - Capacity row
+    // MARK: - Capacity rows
 
-    private func capacityRow(_ resource: Resource) -> some View {
+    @ViewBuilder
+    private func capacityRowLabel(_ row: CapacityPlanningRow) -> some View {
+        HStack(spacing: 4) {
+            Spacer().frame(width: CGFloat(row.indentLevel) * 12 + 4)
+            switch row.kind {
+            case .team(let team, _):
+                let teamKey = team?.id.uuidString ?? "no-team"
+                let isExpanded = !collapsedCapacityTeams.contains(teamKey)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedCapacityTeams.insert(teamKey)
+                        } else {
+                            collapsedCapacityTeams.remove(teamKey)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: "person.3.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(team?.name.isEmpty == false ? team!.name : (team == nil ? "No Team" : "Untitled team"))
+                    .font(captionBoldFont)
+                    .lineLimit(1)
+                Spacer()
+            case .role(let team, let role, _):
+                let teamKey = team?.id.uuidString ?? "no-team"
+                let roleKey = "\(teamKey)/\(role?.id.uuidString ?? "no-role")"
+                let isExpanded = !collapsedCapacityRoles.contains(roleKey)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedCapacityRoles.insert(roleKey)
+                        } else {
+                            collapsedCapacityRoles.remove(roleKey)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: "briefcase.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(role?.name.isEmpty == false ? role!.name : (role == nil ? "No Role" : "Untitled role"))
+                    .font(captionFont)
+                    .lineLimit(1)
+                Spacer()
+            case .resource(let resource):
+                Spacer().frame(width: 10) // align under chevron
+                Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(resource.name.isEmpty ? "Untitled" : resource.name)
+                    .font(captionFont)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }.padding(.trailing, 8)
+    }
+
+    @ViewBuilder
+    private func capacityRowCells(_ row: CapacityPlanningRow) -> some View {
         HStack(spacing: 0) {
-            ForEach(monthKeys, id: \.self) { mk in
-                let alloc = plan.monthAllocation(for: resource.id, in: mk)
-                capacityCell(allocated: alloc, width: monthlyCellWidth)
+            switch row.kind {
+            case .team(_, let groupResources), .role(_, _, let groupResources):
+                ForEach(monthKeys, id: \.self) { mk in
+                    let avg = avgAllocation(for: groupResources, in: mk)
+                    capacityCell(allocated: avg, width: monthlyCellWidth, isAggregate: true)
+                }
+            case .resource(let resource):
+                ForEach(monthKeys, id: \.self) { mk in
+                    let alloc = plan.monthAllocation(for: resource.id, in: mk)
+                    capacityCell(allocated: alloc, width: monthlyCellWidth, isAggregate: false)
+                }
             }
         }
     }
 
-    private func capacityCell(allocated: Double, width: CGFloat) -> some View {
+    private func capacityCell(allocated: Double, width: CGFloat, isAggregate: Bool = false) -> some View {
         let free = 100 - Int(round(allocated * 100))
         let capacityColor: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red : allocated > 0.5 ? .yellow : .green
         let capacityBG: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red.opacity(0.10) : allocated > 0.5 ? .yellow.opacity(0.08) : .green.opacity(0.08)
+        let font: Font = isAggregate
+            ? .system(size: baseCaption2Size * CGFloat(fontScale), weight: .bold).monospacedDigit()
+            : caption2MonoFont
         return Text(allocated == 0 ? "" : "\(free)%")
-            .font(caption2MonoFont)
+            .font(font)
             .foregroundStyle(allocated == 0 ? .secondary : capacityColor)
             .frame(width: width, height: rowHeight)
             .background(capacityBG)
@@ -785,23 +955,6 @@ struct PlanningGridView: View {
     }
 
     // MARK: - Helpers
-
-    private var allocatedResourceIDs: Set<UUID> {
-        var ids = Set<UUID>()
-        for assignment in plan.assignments {
-            for allocation in assignment.allocations {
-                ids.insert(allocation.resourceID)
-            }
-        }
-        return ids
-    }
-
-    private var allocatedResources: [Resource] {
-        let ids = allocatedResourceIDs
-        return resources
-            .filter { ids.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
 
     private func computeIdealColumnWidth() -> CGFloat {
         var maxChars = "Assignment / Resource".count
@@ -991,7 +1144,7 @@ private struct ResourcePickerPopover: View {
         var body: some View {
             // Patch resource IDs to match the allocations
             let _ = patchResourceIDs()
-            PlanningGridView(plan: $plan, resources: $resources)
+            PlanningGridView(plan: $plan, resources: $resources, teams: [], roles: [])
                 .frame(width: 600, height: 400)
         }
 
