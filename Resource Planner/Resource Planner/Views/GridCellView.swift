@@ -1,7 +1,7 @@
 import SwiftUI
 
 private let monthlyCellWidth: CGFloat = 62
-private let cellHeight: CGFloat = 28
+private let defaultCellHeight: CGFloat = 28
 
 // MARK: - Monthly cell
 
@@ -11,6 +11,10 @@ struct MonthlyGridCell: View {
     var tintColor: Color? = nil
     /// 0-based column index within the row. Required for drag-fill.
     var columnIndex: Int = 0
+    /// Row height — must match the parent grid's per-row height so columns stay aligned.
+    var rowHeight: CGFloat = defaultCellHeight
+    /// Font for the typed percentage value. Should scale with the parent grid font.
+    var valueFont: Font = .caption.monospacedDigit()
     /// Called when the user drags this cell's fill handle. `delta` is the signed
     /// number of cells away from this one to fill (negative = left, positive = right).
     /// `phase` is .changed during drag, .ended on release.
@@ -26,9 +30,9 @@ struct MonthlyGridCell: View {
             TextField("", text: percentTextBinding)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
-                .font(.caption.monospacedDigit())
+                .font(valueFont)
                 .padding(.horizontal, 4)
-                .frame(width: monthlyCellWidth - 4, height: cellHeight - 6)
+                .frame(width: monthlyCellWidth - 4, height: rowHeight - 6)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
                         .fill(cellFill(percent: percent, tint: tintColor))
@@ -37,7 +41,7 @@ struct MonthlyGridCell: View {
                     RoundedRectangle(cornerRadius: 4)
                         .stroke(cellStroke(percent: percent), lineWidth: 1)
                 )
-                .frame(width: monthlyCellWidth, height: cellHeight)
+                .frame(width: monthlyCellWidth, height: rowHeight)
 
             // Drag-fill handle — visible on hover when cell has a value
             if hovering && percent > 0 && onDragFill != nil {
@@ -49,7 +53,7 @@ struct MonthlyGridCell: View {
                     .help("Drag to fill across row")
             }
         }
-        .frame(width: monthlyCellWidth, height: cellHeight)
+        .frame(width: monthlyCellWidth, height: rowHeight)
         .onHover { hovering = $0 }
     }
 

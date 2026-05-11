@@ -278,7 +278,9 @@ struct ContentView: View {
             if let planIdx = baselinePlanIndex {
                 PlanningGridView(
                     plan: $document.planner.plans[planIdx],
-                    resources: $document.planner.resources
+                    resources: $document.planner.resources,
+                    teams: document.planner.teams,
+                    roles: document.planner.roles
                 )
             } else { emptyDetail }
 

@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Grid row model
 
 enum GridRowKind {
+    case program(Program)
     case initiative(Initiative)
     case assignment(Assignment)
     case allocation(assignmentID: UUID, allocationID: UUID)
@@ -14,19 +15,37 @@ struct PlanningRow: Identifiable {
     let indentLevel: Int
 }
 
+// MARK: - Capacity row model
+
+enum CapacityRowKind {
+    case team(team: Team?, resources: [Resource])
+    case role(team: Team?, role: Role?, resources: [Resource])
+    case resource(Resource)
+}
+
+struct CapacityPlanningRow: Identifiable {
+    let id: String
+    let kind: CapacityRowKind
+    let indentLevel: Int
+}
+
 // MARK: - Constants
 
 private let defaultFrozenColumnWidth: CGFloat = 120
 private let minFrozenColumnWidth: CGFloat = 80
 private let maxFrozenColumnWidth: CGFloat = 300
 private let monthlyCellWidth: CGFloat = 62
-private let rowHeight: CGFloat = 28
+private let baseRowHeight: CGFloat = 28
+private let baseCaptionSize: CGFloat = 11
+private let baseCaption2Size: CGFloat = 10
 
 // MARK: - PlanningGridView
 
 struct PlanningGridView: View {
     @Binding var plan: Plan
     @Binding var resources: [Resource]
+    let teams: [Team]
+    let roles: [Role]
 
     @State private var rangeStart: Date = Date()
     @State private var rangeEnd: Date = Calendar.gregorianUTC.date(byAdding: .month, value: 3, to: Date()) ?? Date()
@@ -37,7 +56,19 @@ struct PlanningGridView: View {
     @State private var userHasManuallyResized: Bool = false
     @State private var collapsedInitiatives: Set<UUID> = []
     @State private var collapsedAssignments: Set<UUID> = []
+    @State private var collapsedPrograms: Set<UUID> = []
+    @State private var collapsedCapacityTeams: Set<String> = []  // team UUID string or "no-team"
+    @State private var collapsedCapacityRoles: Set<String> = []  // "<teamKey>/<roleKey>"
     @State private var addingResourceToAssignment: UUID? = nil
+    @State private var horizontalScrollOffset: CGFloat = 0
+    @AppStorage("planningGridFontScale") private var fontScale: Double = 1.15
+
+    private var rowHeight: CGFloat { baseRowHeight * CGFloat(fontScale) }
+    private var captionFont: Font { .system(size: baseCaptionSize * CGFloat(fontScale)) }
+    private var captionBoldFont: Font { .system(size: baseCaptionSize * CGFloat(fontScale), weight: .bold) }
+    private var caption2Font: Font { .system(size: baseCaption2Size * CGFloat(fontScale)) }
+    private var caption2BoldFont: Font { .system(size: baseCaption2Size * CGFloat(fontScale), weight: .bold) }
+    private var caption2MonoFont: Font { .system(size: baseCaption2Size * CGFloat(fontScale)).monospacedDigit() }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +84,7 @@ struct PlanningGridView: View {
         }
         .onChange(of: plan.initiatives.count) { _, _ in autoFitColumnWidthIfNeeded() }
         .onChange(of: plan.assignments.count) { _, _ in autoFitColumnWidthIfNeeded() }
+        .onChange(of: plan.programs.count) { _, _ in autoFitColumnWidthIfNeeded() }
         .sheet(isPresented: $showingNewAssignment) {
             NewAssignmentSheetView(
                 initiatives: plan.initiatives,
@@ -93,23 +125,135 @@ struct PlanningGridView: View {
 
     private var gridRows: [PlanningRow] {
         var rows: [PlanningRow] = []
-        for initiative in plan.initiatives {
-            rows.append(PlanningRow(id: "init-\(initiative.id)", kind: .initiative(initiative), indentLevel: 0))
+        let groupingActive = !plan.programs.isEmpty
+        let programIDs = Set(plan.programs.map(\.id))
+
+        // When grouping is active, ungrouped initiatives (nil or stale programID) come first.
+        // When inactive, all initiatives are flat at indent 0 (legacy behavior).
+        let ungroupedInitiatives = plan.initiatives.filter { initiative in
+            guard let pid = initiative.programID else { return true }
+            return !programIDs.contains(pid)
+        }
+        appendInitiativeRows(ungroupedInitiatives, indent: 0, into: &rows)
+
+        guard groupingActive else { return rows }
+
+        for program in plan.programs {
+            rows.append(PlanningRow(id: "prog-\(program.id)", kind: .program(program), indentLevel: 0))
+            guard !collapsedPrograms.contains(program.id) else { continue }
+            let progInitiatives = plan.initiatives.filter { $0.programID == program.id }
+            appendInitiativeRows(progInitiatives, indent: 1, into: &rows)
+        }
+        return rows
+    }
+
+    private func appendInitiativeRows(_ initiatives: [Initiative], indent: Int, into rows: inout [PlanningRow]) {
+        for initiative in initiatives {
+            rows.append(PlanningRow(id: "init-\(initiative.id)", kind: .initiative(initiative), indentLevel: indent))
             guard !collapsedInitiatives.contains(initiative.id) else { continue }
             let initAssignments = plan.assignments.filter { $0.initiativeID == initiative.id }
             for assignment in initAssignments {
-                rows.append(PlanningRow(id: "assign-\(assignment.id)", kind: .assignment(assignment), indentLevel: 1))
+                rows.append(PlanningRow(id: "assign-\(assignment.id)", kind: .assignment(assignment), indentLevel: indent + 1))
                 guard !collapsedAssignments.contains(assignment.id) else { continue }
                 for allocation in assignment.allocations {
                     rows.append(PlanningRow(
                         id: "alloc-\(allocation.id)",
                         kind: .allocation(assignmentID: assignment.id, allocationID: allocation.id),
-                        indentLevel: 2
+                        indentLevel: indent + 2
                     ))
                 }
             }
         }
+    }
+
+    // MARK: - Capacity rows (Team → Role → Resource)
+
+    /// Always include every resource — not just those with assignments. Resources are
+    /// grouped by team (with a "No Team" bucket for teamID == nil), then by role
+    /// inside each team (with a "No Role" bucket for roleID == nil).
+    private var capacityRows: [CapacityPlanningRow] {
+        guard !resources.isEmpty else { return [] }
+
+        // Group resources by team
+        let byTeam: [UUID?: [Resource]] = Dictionary(grouping: resources, by: \.teamID)
+
+        // Order: real teams (sorted by name) that have at least one resource, then "No Team" if any.
+        let teamIDsWithResources = Set(byTeam.keys.compactMap { $0 })
+        let orderedTeams: [Team] = teams
+            .filter { teamIDsWithResources.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        var rows: [CapacityPlanningRow] = []
+
+        for team in orderedTeams {
+            let teamResources = byTeam[team.id] ?? []
+            appendTeamRows(team: team, teamKey: team.id.uuidString, teamResources: teamResources, into: &rows)
+        }
+
+        if let untagged = byTeam[nil], !untagged.isEmpty {
+            appendTeamRows(team: nil, teamKey: "no-team", teamResources: untagged, into: &rows)
+        }
+
         return rows
+    }
+
+    private func appendTeamRows(team: Team?, teamKey: String, teamResources: [Resource], into rows: inout [CapacityPlanningRow]) {
+        rows.append(CapacityPlanningRow(
+            id: "capteam-\(teamKey)",
+            kind: .team(team: team, resources: teamResources),
+            indentLevel: 0
+        ))
+        guard !collapsedCapacityTeams.contains(teamKey) else { return }
+
+        let byRole: [UUID?: [Resource]] = Dictionary(grouping: teamResources, by: \.roleID)
+        let roleIDsWithResources = Set(byRole.keys.compactMap { $0 })
+        let orderedRoles: [Role] = roles
+            .filter { roleIDsWithResources.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        for role in orderedRoles {
+            let roleKey = "\(teamKey)/\(role.id.uuidString)"
+            let roleResources = (byRole[role.id] ?? [])
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            rows.append(CapacityPlanningRow(
+                id: "caprole-\(roleKey)",
+                kind: .role(team: team, role: role, resources: roleResources),
+                indentLevel: 1
+            ))
+            guard !collapsedCapacityRoles.contains(roleKey) else { continue }
+            for resource in roleResources {
+                rows.append(CapacityPlanningRow(
+                    id: "capres-\(roleKey)-\(resource.id.uuidString)",
+                    kind: .resource(resource),
+                    indentLevel: 2
+                ))
+            }
+        }
+
+        if let untaggedRole = byRole[nil], !untaggedRole.isEmpty {
+            let roleKey = "\(teamKey)/no-role"
+            let sorted = untaggedRole.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            rows.append(CapacityPlanningRow(
+                id: "caprole-\(roleKey)",
+                kind: .role(team: team, role: nil, resources: sorted),
+                indentLevel: 1
+            ))
+            guard !collapsedCapacityRoles.contains(roleKey) else { return }
+            for resource in sorted {
+                rows.append(CapacityPlanningRow(
+                    id: "capres-\(roleKey)-\(resource.id.uuidString)",
+                    kind: .resource(resource),
+                    indentLevel: 2
+                ))
+            }
+        }
+    }
+
+    /// Average allocation (0.0 — 1.0+) across the given resources for a given month.
+    private func avgAllocation(for resources: [Resource], in monthKey: MonthKey) -> Double {
+        guard !resources.isEmpty else { return 0 }
+        let total = resources.reduce(0.0) { $0 + plan.monthAllocation(for: $1.id, in: monthKey) }
+        return total / Double(resources.count)
     }
 
     // MARK: - Toolbar
@@ -130,6 +274,7 @@ struct PlanningGridView: View {
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
+                    collapsedPrograms = Set(plan.programs.map(\.id))
                     collapsedInitiatives = Set(plan.initiatives.map(\.id))
                     collapsedAssignments = Set(plan.assignments.map(\.id))
                 }
@@ -140,6 +285,7 @@ struct PlanningGridView: View {
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
+                    collapsedPrograms.removeAll()
                     collapsedInitiatives.removeAll()
                     collapsedAssignments.removeAll()
                 }
@@ -149,6 +295,20 @@ struct PlanningGridView: View {
             .help("Expand all rows")
 
             Spacer()
+
+            Menu {
+                Picker("Font size", selection: $fontScale) {
+                    Text("Small").tag(1.0)
+                    Text("Medium").tag(1.15)
+                    Text("Large").tag(1.3)
+                    Text("Extra Large").tag(1.5)
+                }
+            } label: {
+                Label("Font size", systemImage: "textformat.size")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Adjust planning view font size")
 
             Button {
                 showingNewAssignment = true
@@ -164,123 +324,131 @@ struct PlanningGridView: View {
     // MARK: - Grid body (single horizontal scroll for alignment)
 
     private var gridBody: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // Frozen left column — pinned to exact width
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    // Corner header
-                    Text("Assignment / Resource")
-                        .font(.caption.bold())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: rowHeight)
-                        .padding(.leading, 4)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                    Divider()
+        VStack(spacing: 0) {
+            // Frozen header row — lives outside the vertical scroll so it never moves down.
+            // Right side mirrors the body's horizontal scroll offset to stay column-aligned.
+            HStack(alignment: .top, spacing: 0) {
+                Text("Assignment / Resource")
+                    .font(captionBoldFont)
+                    .frame(width: effectiveColumnWidth, alignment: .leading)
+                    .frame(height: rowHeight)
+                    .padding(.leading, 4)
+                    .background(Color(nsColor: .controlBackgroundColor))
 
-                    // Row labels
-                    ForEach(gridRows) { row in
-                        rowLabel(row)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
-                        Divider()
-                    }
+                // Spacer for divider column (1pt + padding to match body)
+                Color(nsColor: .separatorColor)
+                    .frame(width: 1, height: rowHeight)
 
-                    // Capacity header
-                    if !allocatedResourceIDs.isEmpty {
-                        Text("Remaining Capacity")
-                            .font(.caption.bold())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
-                            .padding(.leading, 4)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                        Divider()
-
-                        ForEach(allocatedResources) { resource in
-                            HStack(spacing: 4) {
-                                Spacer().frame(width: 4)
-                                Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
-                                Text(resource.name.isEmpty ? "Untitled" : resource.name)
-                                    .font(.caption.bold())
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: rowHeight)
-                            Divider()
-                        }
-                    }
-
-                    if gridRows.isEmpty {
-                        Spacer().frame(height: 200)
-                    }
+                // Right side: clipped horizontal pane, content offset by body scroll
+                GeometryReader { proxy in
+                    columnHeaders
+                        .frame(width: gridContentWidth, alignment: .leading)
+                        .offset(x: -horizontalScrollOffset)
                 }
+                .frame(height: rowHeight)
+                .clipped()
             }
-            .frame(width: effectiveColumnWidth)
-            .clipped()
             .padding(.leading, 4)
+            Divider()
 
-            // Draggable divider
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-                .overlay {
-                    Color.clear
-                        .frame(width: 8)
-                        .contentShape(Rectangle())
-                        .pointerStyle(.columnResize)
-                        .onTapGesture(count: 2) {
-                            userHasManuallyResized = false
-                            autoFitColumnWidthIfNeeded()
-                        }
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
-                                .updating($dragOffset) { value, state, _ in
-                                    state = value.translation.width
-                                }
-                                .onEnded { value in
-                                    let newWidth = CGFloat(liveColumnWidth) + value.translation.width
-                                    let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
-                                    liveColumnWidth = clamped
-                                    persistedColumnWidth = clamped
-                                    userHasManuallyResized = true
-                                }
-                        )
-                }
-
-            // Scrollable right area — fills all remaining space
-            ScrollView(.vertical, showsIndicators: false) {
-                ScrollView(.horizontal, showsIndicators: true) {
+            // Body — single outer vertical scroll wraps both panes for synced vertical motion.
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 0) {
+                    // Frozen left column — plain VStack for eager, consistent row heights.
                     VStack(spacing: 0) {
-                        // Column headers
-                        columnHeaders
-                        Divider()
-
-                        // Data rows
                         ForEach(gridRows) { row in
-                            rowCells(row)
+                            rowLabel(row)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
                             Divider()
                         }
 
-                        // Capacity rows
-                        if !allocatedResourceIDs.isEmpty {
-                            // Capacity section header (blank cells row)
-                            Color.clear.frame(width: gridContentWidth, height: rowHeight)
+                        // Capacity header + grouped rows (Team → Role → Resource)
+                        if !capacityRows.isEmpty {
+                            Text("Remaining Capacity")
+                                .font(captionBoldFont)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: rowHeight)
+                                .padding(.leading, 4)
+                                .background(Color(nsColor: .controlBackgroundColor))
                             Divider()
 
-                            ForEach(allocatedResources) { resource in
-                                capacityRow(resource)
+                            ForEach(capacityRows) { row in
+                                capacityRowLabel(row)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(height: rowHeight)
                                 Divider()
                             }
                         }
 
                         if gridRows.isEmpty {
-                            ContentUnavailableView(
-                                "No Initiatives",
-                                systemImage: "flag",
-                                description: Text("Add initiatives from the sidebar, then create assignments here.")
-                            )
-                            .frame(width: gridContentWidth, height: 200)
+                            Spacer().frame(height: 200)
                         }
+                    }
+                    .frame(width: effectiveColumnWidth)
+                    .clipped()
+                    .padding(.leading, 4)
+
+                    // Draggable divider
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                        .overlay {
+                            Color.clear
+                                .frame(width: 8)
+                                .contentShape(Rectangle())
+                                .pointerStyle(.columnResize)
+                                .onTapGesture(count: 2) {
+                                    userHasManuallyResized = false
+                                    autoFitColumnWidthIfNeeded()
+                                }
+                                .gesture(
+                                    DragGesture(minimumDistance: 1)
+                                        .updating($dragOffset) { value, state, _ in
+                                            state = value.translation.width
+                                        }
+                                        .onEnded { value in
+                                            let newWidth = CGFloat(liveColumnWidth) + value.translation.width
+                                            let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
+                                            liveColumnWidth = clamped
+                                            persistedColumnWidth = clamped
+                                            userHasManuallyResized = true
+                                        }
+                                )
+                        }
+
+                    // Right pane: horizontal scroll only; vertical handled by outer scroll.
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(spacing: 0) {
+                            ForEach(gridRows) { row in
+                                rowCells(row)
+                                Divider()
+                            }
+
+                            if !capacityRows.isEmpty {
+                                Color.clear.frame(width: gridContentWidth, height: rowHeight)
+                                Divider()
+
+                                ForEach(capacityRows) { row in
+                                    capacityRowCells(row)
+                                    Divider()
+                                }
+                            }
+
+                            if gridRows.isEmpty {
+                                ContentUnavailableView(
+                                    "No Initiatives",
+                                    systemImage: "flag",
+                                    description: Text("Add initiatives from the sidebar, then create assignments here.")
+                                )
+                                .frame(width: gridContentWidth, height: 200)
+                            }
+                        }
+                    }
+                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.contentOffset.x
+                    } action: { _, newValue in
+                        horizontalScrollOffset = newValue
                     }
                 }
             }
@@ -293,7 +461,7 @@ struct PlanningGridView: View {
         HStack(spacing: 0) {
             ForEach(monthKeys, id: \.self) { mk in
                 Text(mk.shortLabel)
-                    .font(.caption2.bold())
+                    .font(caption2BoldFont)
                     .frame(width: monthlyCellWidth, height: rowHeight)
                     .background(Color(nsColor: .controlBackgroundColor))
             }
@@ -304,7 +472,7 @@ struct PlanningGridView: View {
 
     private func disclosureChevron(isExpanded: Bool) -> some View {
         Image(systemName: "chevron.right")
-            .font(.caption2)
+            .font(caption2Font)
             .foregroundStyle(.secondary)
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
             .animation(.easeInOut(duration: 0.15), value: isExpanded)
@@ -316,6 +484,25 @@ struct PlanningGridView: View {
         HStack(spacing: 4) {
             Spacer().frame(width: CGFloat(row.indentLevel) * 12 + 4)
             switch row.kind {
+            case .program(let program):
+                let isExpanded = !collapsedPrograms.contains(program.id)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedPrograms.insert(program.id)
+                        } else {
+                            collapsedPrograms.remove(program.id)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: program.icon).foregroundStyle(program.color.swiftUIColor).frame(width: 14)
+                Text(program.name.isEmpty ? "Untitled program" : program.name)
+                    .font(captionBoldFont)
+                    .lineLimit(1)
+                Spacer()
             case .initiative(let initiative):
                 let isExpanded = !collapsedInitiatives.contains(initiative.id)
                 Button {
@@ -332,15 +519,15 @@ struct PlanningGridView: View {
                 .buttonStyle(.borderless)
                 Image(systemName: initiative.icon).foregroundStyle(initiative.color.swiftUIColor).frame(width: 14)
                 Text(initiative.name.isEmpty ? "Untitled initiative" : initiative.name)
-                    .font(.caption.bold())
+                    .font(captionBoldFont)
                     .lineLimit(1)
                 Spacer()
                 Button {
                     addAssignment(to: initiative.id)
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(initiative.color.swiftUIColor)
-                        .font(.caption)
+                        .foregroundStyle(.blue)
+                        .font(captionFont)
                 }
                 .buttonStyle(.borderless)
                 .help("Add assignment")
@@ -366,7 +553,7 @@ struct PlanningGridView: View {
                     }
                     Image(systemName: "doc.text.fill").foregroundStyle(.blue).frame(width: 14)
                     TextField("Assignment name", text: binding)
-                        .font(.caption)
+                        .font(captionFont)
                         .textFieldStyle(.plain)
                         .lineLimit(1)
                     Spacer()
@@ -375,7 +562,7 @@ struct PlanningGridView: View {
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(.blue)
-                            .font(.caption)
+                            .font(captionFont)
                     }
                     .buttonStyle(.borderless)
                     .help("Add resource")
@@ -396,7 +583,7 @@ struct PlanningGridView: View {
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .foregroundStyle(.red)
-                            .font(.caption)
+                            .font(captionFont)
                     }
                     .buttonStyle(.borderless)
                     .help("Delete assignment")
@@ -406,7 +593,7 @@ struct PlanningGridView: View {
                 Spacer().frame(width: 10) // aligns with chevron in parent rows
                 Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
                 Text(resourceName.isEmpty ? "Untitled" : resourceName)
-                    .font(.caption)
+                    .font(captionFont)
                     .lineLimit(1)
                 Spacer()
                 Button {
@@ -414,7 +601,7 @@ struct PlanningGridView: View {
                 } label: {
                     Image(systemName: "minus.circle.fill")
                         .foregroundStyle(.red)
-                        .font(.caption)
+                        .font(captionFont)
                 }
                 .buttonStyle(.borderless)
                 .help("Remove resource from assignment")
@@ -426,17 +613,115 @@ struct PlanningGridView: View {
     @ViewBuilder
     private func rowContextMenu(_ row: PlanningRow) -> some View {
         switch row.kind {
+        case .program(let program):
+            Button("Move Up") { moveProgram(program.id, by: -1) }
+                .disabled(!canMoveProgram(program.id, by: -1))
+            Button("Move Down") { moveProgram(program.id, by: 1) }
+                .disabled(!canMoveProgram(program.id, by: 1))
+        case .initiative(let initiative):
+            Button("Move Up") { moveInitiative(initiative.id, by: -1) }
+                .disabled(!canMoveInitiative(initiative.id, by: -1))
+            Button("Move Down") { moveInitiative(initiative.id, by: 1) }
+                .disabled(!canMoveInitiative(initiative.id, by: 1))
         case .assignment(let assignment):
+            Button("Move Up") { moveAssignment(assignment.id, by: -1) }
+                .disabled(!canMoveAssignment(assignment.id, by: -1))
+            Button("Move Down") { moveAssignment(assignment.id, by: 1) }
+                .disabled(!canMoveAssignment(assignment.id, by: 1))
+            Divider()
             Button("Delete Assignment", role: .destructive) {
                 deleteAssignment(assignment.id)
             }
         case .allocation(let assignmentID, let allocationID):
+            Button("Move Up") { moveAllocation(allocationID, in: assignmentID, by: -1) }
+                .disabled(!canMoveAllocation(allocationID, in: assignmentID, by: -1))
+            Button("Move Down") { moveAllocation(allocationID, in: assignmentID, by: 1) }
+                .disabled(!canMoveAllocation(allocationID, in: assignmentID, by: 1))
+            Divider()
             Button("Remove Resource from Assignment", role: .destructive) {
                 removeAllocation(allocationID: allocationID, fromAssignment: assignmentID)
             }
-        default:
-            EmptyView()
         }
+    }
+
+    // MARK: - Reordering
+
+    private func moveProgram(_ id: UUID, by delta: Int) {
+        guard let i = plan.programs.firstIndex(where: { $0.id == id }) else { return }
+        let target = i + delta
+        guard plan.programs.indices.contains(target) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.programs.swapAt(i, target)
+        }
+    }
+
+    private func canMoveProgram(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.programs.firstIndex(where: { $0.id == id }) else { return false }
+        return plan.programs.indices.contains(i + delta)
+    }
+
+    /// Move an initiative within its sibling group (same programID, including nil).
+    private func moveInitiative(_ id: UUID, by delta: Int) {
+        guard let i = plan.initiatives.firstIndex(where: { $0.id == id }),
+              let swapWith = adjacentInitiativeIndex(from: i, by: delta) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.initiatives.swapAt(i, swapWith)
+        }
+    }
+
+    private func canMoveInitiative(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.initiatives.firstIndex(where: { $0.id == id }) else { return false }
+        return adjacentInitiativeIndex(from: i, by: delta) != nil
+    }
+
+    /// Find the next initiative index in the given direction with the same programID.
+    private func adjacentInitiativeIndex(from i: Int, by delta: Int) -> Int? {
+        let pid = plan.initiatives[i].programID
+        var j = i + (delta >= 0 ? 1 : -1)
+        while plan.initiatives.indices.contains(j) {
+            if plan.initiatives[j].programID == pid { return j }
+            j += (delta >= 0 ? 1 : -1)
+        }
+        return nil
+    }
+
+    private func moveAssignment(_ id: UUID, by delta: Int) {
+        guard let i = plan.assignments.firstIndex(where: { $0.id == id }),
+              let swapWith = adjacentAssignmentIndex(from: i, by: delta) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.assignments.swapAt(i, swapWith)
+        }
+    }
+
+    private func canMoveAssignment(_ id: UUID, by delta: Int) -> Bool {
+        guard let i = plan.assignments.firstIndex(where: { $0.id == id }) else { return false }
+        return adjacentAssignmentIndex(from: i, by: delta) != nil
+    }
+
+    private func adjacentAssignmentIndex(from i: Int, by delta: Int) -> Int? {
+        let initiativeID = plan.assignments[i].initiativeID
+        var j = i + (delta >= 0 ? 1 : -1)
+        while plan.assignments.indices.contains(j) {
+            if plan.assignments[j].initiativeID == initiativeID { return j }
+            j += (delta >= 0 ? 1 : -1)
+        }
+        return nil
+    }
+
+    private func moveAllocation(_ allocationID: UUID, in assignmentID: UUID, by delta: Int) {
+        guard let ai = plan.assignments.firstIndex(where: { $0.id == assignmentID }),
+              let li = plan.assignments[ai].allocations.firstIndex(where: { $0.id == allocationID }) else { return }
+        let target = li + delta
+        guard plan.assignments[ai].allocations.indices.contains(target) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            plan.assignments[ai].allocations.swapAt(li, target)
+        }
+    }
+
+    private func canMoveAllocation(_ allocationID: UUID, in assignmentID: UUID, by delta: Int) -> Bool {
+        guard let ai = plan.assignments.firstIndex(where: { $0.id == assignmentID }),
+              let li = plan.assignments[ai].allocations.firstIndex(where: { $0.id == allocationID }) else { return false }
+        return plan.assignments[ai].allocations.indices.contains(li + delta)
     }
 
     // MARK: - Row cells
@@ -444,6 +729,13 @@ struct PlanningGridView: View {
     private func rowCells(_ row: PlanningRow) -> some View {
         HStack(spacing: 0) {
             switch row.kind {
+            case .program(let program):
+                ForEach(monthKeys, id: \.self) { _ in
+                    Rectangle()
+                        .fill(program.color.swiftUIColor.opacity(0.18))
+                        .frame(width: monthlyCellWidth, height: rowHeight)
+                        .border(.quaternary, width: 0.5)
+                }
             case .initiative(let initiative):
                 ForEach(monthKeys, id: \.self) { mk in
                     initiativeCell(initiative: initiative, monthKey: mk)
@@ -468,6 +760,8 @@ struct PlanningGridView: View {
                             monthKey: mk,
                             tintColor: initiative?.color.swiftUIColor,
                             columnIndex: idx,
+                            rowHeight: rowHeight,
+                            valueFont: captionFont.monospacedDigit(),
                             onDragFill: { sourceCol, delta, phase in
                                 handleDragFill(
                                     assignmentID: assignmentID,
@@ -568,23 +862,92 @@ struct PlanningGridView: View {
         return plan.initiatives.first(where: { $0.id == assignment.initiativeID })
     }
 
-    // MARK: - Capacity row
+    // MARK: - Capacity rows
 
-    private func capacityRow(_ resource: Resource) -> some View {
+    @ViewBuilder
+    private func capacityRowLabel(_ row: CapacityPlanningRow) -> some View {
+        HStack(spacing: 4) {
+            Spacer().frame(width: CGFloat(row.indentLevel) * 12 + 4)
+            switch row.kind {
+            case .team(let team, _):
+                let teamKey = team?.id.uuidString ?? "no-team"
+                let isExpanded = !collapsedCapacityTeams.contains(teamKey)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedCapacityTeams.insert(teamKey)
+                        } else {
+                            collapsedCapacityTeams.remove(teamKey)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: "person.3.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(team?.name.isEmpty == false ? team!.name : (team == nil ? "No Team" : "Untitled team"))
+                    .font(captionBoldFont)
+                    .lineLimit(1)
+                Spacer()
+            case .role(let team, let role, _):
+                let teamKey = team?.id.uuidString ?? "no-team"
+                let roleKey = "\(teamKey)/\(role?.id.uuidString ?? "no-role")"
+                let isExpanded = !collapsedCapacityRoles.contains(roleKey)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded {
+                            collapsedCapacityRoles.insert(roleKey)
+                        } else {
+                            collapsedCapacityRoles.remove(roleKey)
+                        }
+                    }
+                } label: {
+                    disclosureChevron(isExpanded: isExpanded)
+                }
+                .buttonStyle(.borderless)
+                Image(systemName: "briefcase.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(role?.name.isEmpty == false ? role!.name : (role == nil ? "No Role" : "Untitled role"))
+                    .font(captionFont)
+                    .lineLimit(1)
+                Spacer()
+            case .resource(let resource):
+                Spacer().frame(width: 10) // align under chevron
+                Image(systemName: "person.fill").foregroundStyle(.secondary).frame(width: 14)
+                Text(resource.name.isEmpty ? "Untitled" : resource.name)
+                    .font(captionFont)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }.padding(.trailing, 8)
+    }
+
+    @ViewBuilder
+    private func capacityRowCells(_ row: CapacityPlanningRow) -> some View {
         HStack(spacing: 0) {
-            ForEach(monthKeys, id: \.self) { mk in
-                let alloc = plan.monthAllocation(for: resource.id, in: mk)
-                capacityCell(allocated: alloc, width: monthlyCellWidth)
+            switch row.kind {
+            case .team(_, let groupResources), .role(_, _, let groupResources):
+                ForEach(monthKeys, id: \.self) { mk in
+                    let avg = avgAllocation(for: groupResources, in: mk)
+                    capacityCell(allocated: avg, width: monthlyCellWidth, isAggregate: true)
+                }
+            case .resource(let resource):
+                ForEach(monthKeys, id: \.self) { mk in
+                    let alloc = plan.monthAllocation(for: resource.id, in: mk)
+                    capacityCell(allocated: alloc, width: monthlyCellWidth, isAggregate: false)
+                }
             }
         }
     }
 
-    private func capacityCell(allocated: Double, width: CGFloat) -> some View {
+    private func capacityCell(allocated: Double, width: CGFloat, isAggregate: Bool = false) -> some View {
         let free = 100 - Int(round(allocated * 100))
         let capacityColor: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red : allocated > 0.5 ? .yellow : .green
         let capacityBG: Color = allocated == 0 ? .clear : allocated > 0.8 ? .red.opacity(0.10) : allocated > 0.5 ? .yellow.opacity(0.08) : .green.opacity(0.08)
+        let font: Font = isAggregate
+            ? .system(size: baseCaption2Size * CGFloat(fontScale), weight: .bold).monospacedDigit()
+            : caption2MonoFont
         return Text(allocated == 0 ? "" : "\(free)%")
-            .font(.caption2.monospacedDigit())
+            .font(font)
             .foregroundStyle(allocated == 0 ? .secondary : capacityColor)
             .frame(width: width, height: rowHeight)
             .background(capacityBG)
@@ -593,41 +956,31 @@ struct PlanningGridView: View {
 
     // MARK: - Helpers
 
-    private var allocatedResourceIDs: Set<UUID> {
-        var ids = Set<UUID>()
-        for assignment in plan.assignments {
-            for allocation in assignment.allocations {
-                ids.insert(allocation.resourceID)
-            }
-        }
-        return ids
-    }
-
-    private var allocatedResources: [Resource] {
-        let ids = allocatedResourceIDs
-        return resources
-            .filter { ids.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
     private func computeIdealColumnWidth() -> CGFloat {
         var maxChars = "Assignment / Resource".count
+        let groupingActive = !plan.programs.isEmpty
+        let extra = groupingActive ? 2 : 0 // initiatives indent one level deeper when grouped
+
+        for program in plan.programs {
+            let name = program.name.isEmpty ? "Untitled program" : program.name
+            maxChars = max(maxChars, name.count)
+        }
 
         for initiative in plan.initiatives {
             let name = initiative.name.isEmpty ? "Untitled initiative" : initiative.name
-            maxChars = max(maxChars, name.count)
+            maxChars = max(maxChars, name.count + extra)
         }
 
         for assignment in plan.assignments {
             let name = assignment.name.isEmpty ? "Assignment name" : assignment.name
-            maxChars = max(maxChars, name.count + 2) // indent offset
+            maxChars = max(maxChars, name.count + 2 + extra)
         }
 
         for assignment in plan.assignments {
             for allocation in assignment.allocations {
                 let name = resources.first(where: { $0.id == allocation.resourceID })?.name ?? "Unknown"
                 let displayName = name.isEmpty ? "Untitled" : name
-                maxChars = max(maxChars, displayName.count + 4) // double indent offset
+                maxChars = max(maxChars, displayName.count + 4 + extra)
             }
         }
 
@@ -791,7 +1144,7 @@ private struct ResourcePickerPopover: View {
         var body: some View {
             // Patch resource IDs to match the allocations
             let _ = patchResourceIDs()
-            PlanningGridView(plan: $plan, resources: $resources)
+            PlanningGridView(plan: $plan, resources: $resources, teams: [], roles: [])
                 .frame(width: 600, height: 400)
         }
 
