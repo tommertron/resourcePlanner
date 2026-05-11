@@ -42,6 +42,7 @@ struct PlanningGridView: View {
     @State private var collapsedAssignments: Set<UUID> = []
     @State private var collapsedPrograms: Set<UUID> = []
     @State private var addingResourceToAssignment: UUID? = nil
+    @State private var horizontalScrollOffset: CGFloat = 0
     @AppStorage("planningGridFontScale") private var fontScale: Double = 1.15
 
     private var rowHeight: CGFloat { baseRowHeight * CGFloat(fontScale) }
@@ -215,13 +216,38 @@ struct PlanningGridView: View {
     // MARK: - Grid body (single horizontal scroll for alignment)
 
     private var gridBody: some View {
-        ScrollView(.vertical, showsIndicators: true) {
+        VStack(spacing: 0) {
+            // Frozen header row — lives outside the vertical scroll so it never moves down.
+            // Right side mirrors the body's horizontal scroll offset to stay column-aligned.
             HStack(alignment: .top, spacing: 0) {
-                // Frozen left column — no inner vertical scroll; shares the outer one.
-                // Section header pins to top via LazyVStack(pinnedViews:).
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        // Row labels
+                Text("Assignment / Resource")
+                    .font(captionBoldFont)
+                    .frame(width: effectiveColumnWidth, alignment: .leading)
+                    .frame(height: rowHeight)
+                    .padding(.leading, 4)
+                    .background(Color(nsColor: .controlBackgroundColor))
+
+                // Spacer for divider column (1pt + padding to match body)
+                Color(nsColor: .separatorColor)
+                    .frame(width: 1, height: rowHeight)
+
+                // Right side: clipped horizontal pane, content offset by body scroll
+                GeometryReader { proxy in
+                    columnHeaders
+                        .frame(width: gridContentWidth, alignment: .leading)
+                        .offset(x: -horizontalScrollOffset)
+                }
+                .frame(height: rowHeight)
+                .clipped()
+            }
+            .padding(.leading, 4)
+            Divider()
+
+            // Body — single outer vertical scroll wraps both panes for synced vertical motion.
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 0) {
+                    // Frozen left column — plain VStack for eager, consistent row heights.
+                    VStack(spacing: 0) {
                         ForEach(gridRows) { row in
                             rowLabel(row)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,64 +283,48 @@ struct PlanningGridView: View {
                         if gridRows.isEmpty {
                             Spacer().frame(height: 200)
                         }
-                    } header: {
-                        VStack(spacing: 0) {
-                            Text("Assignment / Resource")
-                                .font(captionBoldFont)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .frame(height: rowHeight)
-                                .padding(.leading, 4)
-                                .background(Color(nsColor: .controlBackgroundColor))
-                            Divider()
+                    }
+                    .frame(width: effectiveColumnWidth)
+                    .clipped()
+                    .padding(.leading, 4)
+
+                    // Draggable divider
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                        .overlay {
+                            Color.clear
+                                .frame(width: 8)
+                                .contentShape(Rectangle())
+                                .pointerStyle(.columnResize)
+                                .onTapGesture(count: 2) {
+                                    userHasManuallyResized = false
+                                    autoFitColumnWidthIfNeeded()
+                                }
+                                .gesture(
+                                    DragGesture(minimumDistance: 1)
+                                        .updating($dragOffset) { value, state, _ in
+                                            state = value.translation.width
+                                        }
+                                        .onEnded { value in
+                                            let newWidth = CGFloat(liveColumnWidth) + value.translation.width
+                                            let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
+                                            liveColumnWidth = clamped
+                                            persistedColumnWidth = clamped
+                                            userHasManuallyResized = true
+                                        }
+                                )
                         }
-                    }
-                }
-                .frame(width: effectiveColumnWidth)
-                .clipped()
-                .padding(.leading, 4)
 
-                // Draggable divider
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(width: 1)
-                    .overlay {
-                        Color.clear
-                            .frame(width: 8)
-                            .contentShape(Rectangle())
-                            .pointerStyle(.columnResize)
-                            .onTapGesture(count: 2) {
-                                userHasManuallyResized = false
-                                autoFitColumnWidthIfNeeded()
-                            }
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
-                                    .updating($dragOffset) { value, state, _ in
-                                        state = value.translation.width
-                                    }
-                                    .onEnded { value in
-                                        let newWidth = CGFloat(liveColumnWidth) + value.translation.width
-                                        let clamped = Double(min(max(newWidth, minFrozenColumnWidth), maxFrozenColumnWidth))
-                                        liveColumnWidth = clamped
-                                        persistedColumnWidth = clamped
-                                        userHasManuallyResized = true
-                                    }
-                            )
-                    }
-
-                // Scrollable right area — only horizontal scroll here; vertical handled by outer.
-                // Section header (month columns) pins to top via LazyVStack(pinnedViews:).
-                ScrollView(.horizontal, showsIndicators: true) {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section {
-                            // Data rows
+                    // Right pane: horizontal scroll only; vertical handled by outer scroll.
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(spacing: 0) {
                             ForEach(gridRows) { row in
                                 rowCells(row)
                                 Divider()
                             }
 
-                            // Capacity rows
                             if !allocatedResourceIDs.isEmpty {
-                                // Capacity section header (blank cells row)
                                 Color.clear.frame(width: gridContentWidth, height: rowHeight)
                                 Divider()
 
@@ -332,12 +342,12 @@ struct PlanningGridView: View {
                                 )
                                 .frame(width: gridContentWidth, height: 200)
                             }
-                        } header: {
-                            VStack(spacing: 0) {
-                                columnHeaders
-                                Divider()
-                            }
                         }
+                    }
+                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.contentOffset.x
+                    } action: { _, newValue in
+                        horizontalScrollOffset = newValue
                     }
                 }
             }
