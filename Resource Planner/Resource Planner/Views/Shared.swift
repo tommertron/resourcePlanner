@@ -87,9 +87,6 @@ struct ResourceRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(resource.monthlyCost, format: .currency(code: resource.currencyCode).precision(.fractionLength(0)))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
     }

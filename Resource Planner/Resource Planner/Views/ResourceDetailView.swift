@@ -12,6 +12,9 @@ struct ResourceDetailView: View {
     @State private var pendingBasis: RateBasis?
     @State private var showingNewRoleSheet = false
     @State private var newRoleName = ""
+    @State private var revealedResourceID: UUID?
+
+    private var salaryRevealed: Bool { revealedResourceID == resource.id }
 
     var body: some View {
         Form {
@@ -61,74 +64,103 @@ struct ResourceDetailView: View {
             }
 
             Section {
-                Picker("Rate Basis", selection: basisBinding) {
-                    ForEach(RateBasis.allCases) { b in
-                        Text(b.displayName).tag(b)
+                if salaryRevealed {
+                    Picker("Rate Basis", selection: basisBinding) {
+                        ForEach(RateBasis.allCases) { b in
+                            Text(b.displayName).tag(b)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
+                    .pickerStyle(.segmented)
 
-                Picker("Currency", selection: $resource.currencyCode) {
-                    ForEach(SupportedCurrency.allCases) { c in
-                        Text(c.rawValue).tag(c.rawValue)
+                    Picker("Currency", selection: $resource.currencyCode) {
+                        ForEach(SupportedCurrency.allCases) { c in
+                            Text(c.rawValue).tag(c.rawValue)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: resource.currencyCode) { _, _ in
-                    resource.isCustomRate = true
-                }
+                    .pickerStyle(.segmented)
+                    .onChange(of: resource.currencyCode) { _, _ in
+                        resource.isCustomRate = true
+                    }
 
-                LabeledContent(rateLabel) {
-                    TextField("", value: rateBinding,
-                              format: .number.precision(.fractionLength(0...2)))
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 160)
-                }
-
-                if resource.rateBasis == .hourly {
-                    LabeledContent("Hours per week") {
-                        TextField("", value: zeroEmptyBinding($resource.hoursPerWeek),
-                                  format: .number.precision(.fractionLength(0...1)))
+                    LabeledContent(rateLabel) {
+                        TextField("", value: rateBinding,
+                                  format: .number.precision(.fractionLength(0...2)))
                             .textFieldStyle(.roundedBorder)
                             .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: 100)
+                            .frame(maxWidth: 160)
                     }
-                }
 
-                if resource.rateBasis == .annual && resource.rate > 0 {
-                    LabeledContent("Equivalent hourly (40h/wk)") {
-                        Text(resource.monthlyCost / (52.0 / 12.0 * 40),
+                    if resource.rateBasis == .hourly {
+                        LabeledContent("Hours per week") {
+                            TextField("", value: zeroEmptyBinding($resource.hoursPerWeek),
+                                      format: .number.precision(.fractionLength(0...1)))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(maxWidth: 100)
+                        }
+                    }
+
+                    if resource.rateBasis == .annual && resource.rate > 0 {
+                        LabeledContent("Equivalent hourly (40h/wk)") {
+                            Text(resource.monthlyCost / (52.0 / 12.0 * 40),
+                                 format: .currency(code: resource.currencyCode).precision(.fractionLength(2)))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if resource.rateBasis == .monthly && resource.rate > 0 {
+                        LabeledContent("Equivalent hourly (40h/wk)") {
+                            Text(resource.monthlyCost / (52.0 / 12.0 * 40),
+                                 format: .currency(code: resource.currencyCode).precision(.fractionLength(2)))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    LabeledContent("Monthly cost") {
+                        Text(resource.monthlyCost,
                              format: .currency(code: resource.currencyCode).precision(.fractionLength(2)))
+                            .monospacedDigit()
+                    }
+
+                    LabeledContent("Annualized") {
+                        Text(resource.monthlyCost * 12,
+                             format: .currency(code: resource.currencyCode).precision(.fractionLength(0)))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
-                } else if resource.rateBasis == .monthly && resource.rate > 0 {
-                    LabeledContent("Equivalent hourly (40h/wk)") {
-                        Text(resource.monthlyCost / (52.0 / 12.0 * 40),
-                             format: .currency(code: resource.currencyCode).precision(.fractionLength(2)))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        revealedResourceID = resource.id
+                    } label: {
+                        HStack {
+                            Image(systemName: "eye.slash")
+                                .foregroundStyle(.secondary)
+                            Text("••••••")
+                                .font(.body.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("Click to reveal / edit")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
                     }
-                }
-
-                LabeledContent("Monthly cost") {
-                    Text(resource.monthlyCost,
-                         format: .currency(code: resource.currencyCode).precision(.fractionLength(2)))
-                        .monospacedDigit()
-                }
-
-                LabeledContent("Annualized") {
-                    Text(resource.monthlyCost * 12,
-                         format: .currency(code: resource.currencyCode).precision(.fractionLength(0)))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
                 }
             } header: {
                 HStack {
                     Text("Compensation")
                     Spacer()
-                    if currentRole != nil {
+                    if salaryRevealed {
+                        Button {
+                            revealedResourceID = nil
+                        } label: {
+                            Label("Hide", systemImage: "eye.slash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    if salaryRevealed, currentRole != nil {
                         Button {
                             if let r = currentRole { resource.adoptRoleDefaults(r) }
                         } label: {
@@ -143,7 +175,7 @@ struct ResourceDetailView: View {
                     }
                 }
             } footer: {
-                if resource.isCustomRate, let role = currentRole, !matchesDefault {
+                if salaryRevealed, resource.isCustomRate, let role = currentRole, !matchesDefault {
                     Label("Custom rate — diverges from \(role.name.isEmpty ? "role" : role.name) default of \(formattedDefault(role))",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
