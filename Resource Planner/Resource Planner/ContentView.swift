@@ -1,32 +1,74 @@
 import SwiftUI
 
+// MARK: - Sidebar model
+
+enum SidebarCategory: Hashable, CaseIterable, Identifiable {
+    case resources, teams, roles, programs, initiatives, planning, reports
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .resources:   return "Resources"
+        case .teams:       return "Teams"
+        case .roles:       return "Roles"
+        case .programs:    return "Programs"
+        case .initiatives: return "Initiatives"
+        case .planning:    return "Planning"
+        case .reports:     return "Reports"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .resources:   return "person.2.fill"
+        case .teams:       return "person.3.fill"
+        case .roles:       return "tag.fill"
+        case .programs:    return "rectangle.stack.fill"
+        case .initiatives: return "flag.fill"
+        case .planning:    return "calendar"
+        case .reports:     return "chart.bar.fill"
+        }
+    }
+
+    var hidesDetailColumn: Bool {
+        self == .planning || self == .reports
+    }
+}
+
 enum SidebarSelection: Hashable {
     case resource(UUID)
     case role(UUID)
     case team(UUID)
     case program(UUID)
     case initiative(UUID)
-    case planning
-    case reports
 }
 
 struct ContentView: View {
     @Binding var document: Resource_PlannerDocument
-    @State private var selection: SidebarSelection?
+    @State private var category: SidebarCategory? = .resources
+    @State private var itemSelection: SidebarSelection?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showingNewRoleSheet = false
     @State private var newRoleName = ""
     @State private var showingSettings = false
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 360)
+                .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+        } content: {
+            content
+                .navigationSplitViewColumnWidth(min: 220, ideal: 300, max: 420)
         } detail: {
             detail
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 880, minHeight: 560)
+        .frame(minWidth: 1000, minHeight: 600)
         .onAppear { ensureBaselinePlan() }
+        .onChange(of: category) { _, new in
+            columnVisibility = (new?.hidesDetailColumn ?? false) ? .doubleColumn : .all
+        }
         .sheet(isPresented: $showingSettings) {
             PlanSettingsView(document: $document.planner)
         }
@@ -37,7 +79,8 @@ struct ContentView: View {
                     if !trimmed.isEmpty {
                         let role = Role(name: trimmed)
                         document.planner.roles.append(role)
-                        selection = .role(role.id)
+                        category = .roles
+                        itemSelection = .role(role.id)
                     }
                 }
                 newRoleName = ""
@@ -45,143 +88,23 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Sidebar
+    // MARK: Sidebar (categories only)
 
     private var sidebar: some View {
-        List(selection: $selection) {
-            Section {
-                ForEach(document.planner.resources) { r in
-                    ResourceRow(resource: r, role: roleName(r.roleID))
-                        .tag(SidebarSelection.resource(r.id))
-                        .contextMenu {
-                            Button("Delete", role: .destructive) {
-                                document.planner.resources.removeAll { $0.id == r.id }
-                                if selection == .resource(r.id) { selection = nil }
-                            }
-                        }
-                }
-                if document.planner.resources.isEmpty {
-                    Text("No resources yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                sectionHeader(title: "Resources", systemImage: "person.2.fill", help: "New resource") {
-                    addResource()
-                }
+        List(selection: $category) {
+            Section("Plan") {
+                categoryRow(.resources)
+                categoryRow(.teams)
+                categoryRow(.roles)
+                categoryRow(.programs)
+                categoryRow(.initiatives)
             }
-
             Section {
-                ForEach(document.planner.roles) { role in
-                    RoleSidebarRow(role: role, count: usageCount(role.id))
-                        .tag(SidebarSelection.role(role.id))
-                        .contextMenu {
-                            Button("Delete", role: .destructive) {
-                                if usageCount(role.id) == 0 {
-                                    document.planner.roles.removeAll { $0.id == role.id }
-                                    if selection == .role(role.id) { selection = nil }
-                                }
-                            }
-                            .disabled(usageCount(role.id) > 0)
-                        }
-                }
-                if document.planner.roles.isEmpty {
-                    Text("No roles yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                sectionHeader(title: "Roles", systemImage: "tag.fill", help: "New role") {
-                    DispatchQueue.main.async {
-                        newRoleName = ""
-                        showingNewRoleSheet = true
-                    }
-                }
-            }
-
-            Section {
-                ForEach(document.planner.teams) { team in
-                    TeamSidebarRow(team: team, count: teamMemberCount(team.id))
-                        .tag(SidebarSelection.team(team.id))
-                        .contextMenu {
-                            Button("Delete", role: .destructive) {
-                                deleteTeam(team.id)
-                            }
-                        }
-                }
-                if document.planner.teams.isEmpty {
-                    Text("No teams yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                sectionHeader(title: "Teams", systemImage: "person.3.fill", help: "New team") {
-                    addTeam()
-                }
-            }
-
-            Section {
-                if let planIdx = baselinePlanIndex {
-                    ForEach(document.planner.plans[planIdx].programs) { program in
-                        ProgramSidebarRow(program: program, count: programInitiativeCount(program.id))
-                            .tag(SidebarSelection.program(program.id))
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    deleteProgram(program.id)
-                                }
-                            }
-                    }
-                    if document.planner.plans[planIdx].programs.isEmpty {
-                        Text("No programs yet")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("No programs yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                sectionHeader(title: "Programs", systemImage: "rectangle.stack.fill", help: "New program") {
-                    addProgram()
-                }
-            }
-
-            Section {
-                if let planIdx = baselinePlanIndex {
-                    ForEach(document.planner.plans[planIdx].initiatives) { initiative in
-                        InitiativeSidebarRow(initiative: initiative)
-                            .tag(SidebarSelection.initiative(initiative.id))
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    deleteInitiative(initiative.id)
-                                }
-                            }
-                    }
-                    if document.planner.plans[planIdx].initiatives.isEmpty {
-                        Text("No initiatives yet")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("No initiatives yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                sectionHeader(title: "Initiatives", systemImage: "flag.fill", help: "New initiative") {
-                    addInitiative()
-                }
-            }
-
-            Section {
-                Label("Planning", systemImage: "calendar")
-                    .tag(SidebarSelection.planning)
-                Label("Reports", systemImage: "chart.bar.fill")
-                    .tag(SidebarSelection.reports)
+                categoryRow(.planning)
+                categoryRow(.reports)
             } header: {
                 HStack {
-                    Label("Plans", systemImage: "folder.fill")
+                    Text("Views")
                     Spacer()
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -192,26 +115,223 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
+        .navigationTitle("Resource Planner")
     }
 
-    private func sectionHeader(title: String, systemImage: String, help: String, action: @escaping () -> Void) -> some View {
-        HStack {
-            Label(title, systemImage: systemImage)
-            Spacer()
-            Button(action: action) {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.borderless)
-            .help(help)
+    private func categoryRow(_ cat: SidebarCategory) -> some View {
+        Label(cat.title, systemImage: cat.systemImage).tag(cat)
+    }
+
+    // MARK: Content (middle column)
+
+    @ViewBuilder
+    private var content: some View {
+        switch category {
+        case .resources:   resourcesList
+        case .teams:       teamsList
+        case .roles:       rolesList
+        case .programs:    programsList
+        case .initiatives: initiativesList
+        case .planning:    planningView
+        case .reports:     reportsView
+        case .none:
+            ContentUnavailableView(
+                "Select a category",
+                systemImage: "sidebar.left",
+                description: Text("Pick a category in the sidebar.")
+            )
         }
     }
 
-    // MARK: Detail
+    private var resourcesList: some View {
+        List(selection: $itemSelection) {
+            ForEach(document.planner.resources) { r in
+                ResourceRow(resource: r, role: roleName(r.roleID))
+                    .tag(SidebarSelection.resource(r.id))
+                    .contextMenu {
+                        Button("Delete", role: .destructive) {
+                            document.planner.resources.removeAll { $0.id == r.id }
+                            if itemSelection == .resource(r.id) { itemSelection = nil }
+                        }
+                    }
+            }
+        }
+        .overlay {
+            if document.planner.resources.isEmpty {
+                ContentUnavailableView("No Resources", systemImage: "person.2",
+                                       description: Text("Click + to add a resource."))
+            }
+        }
+        .navigationTitle("Resources")
+        .toolbar {
+            ToolbarItem {
+                Button { addResource() } label: {
+                    Label("New Resource", systemImage: "plus")
+                }
+                .help("New resource")
+            }
+        }
+    }
+
+    private var teamsList: some View {
+        List(selection: $itemSelection) {
+            ForEach(document.planner.teams) { team in
+                TeamSidebarRow(team: team, count: teamMemberCount(team.id))
+                    .tag(SidebarSelection.team(team.id))
+                    .contextMenu {
+                        Button("Delete", role: .destructive) { deleteTeam(team.id) }
+                    }
+            }
+        }
+        .overlay {
+            if document.planner.teams.isEmpty {
+                ContentUnavailableView("No Teams", systemImage: "person.3",
+                                       description: Text("Click + to add a team."))
+            }
+        }
+        .navigationTitle("Teams")
+        .toolbar {
+            ToolbarItem {
+                Button { addTeam() } label: {
+                    Label("New Team", systemImage: "plus")
+                }
+                .help("New team")
+            }
+        }
+    }
+
+    private var rolesList: some View {
+        List(selection: $itemSelection) {
+            ForEach(document.planner.roles) { role in
+                RoleSidebarRow(role: role, count: usageCount(role.id))
+                    .tag(SidebarSelection.role(role.id))
+                    .contextMenu {
+                        Button("Delete", role: .destructive) {
+                            if usageCount(role.id) == 0 {
+                                document.planner.roles.removeAll { $0.id == role.id }
+                                if itemSelection == .role(role.id) { itemSelection = nil }
+                            }
+                        }
+                        .disabled(usageCount(role.id) > 0)
+                    }
+            }
+        }
+        .overlay {
+            if document.planner.roles.isEmpty {
+                ContentUnavailableView("No Roles", systemImage: "tag",
+                                       description: Text("Click + to add a role."))
+            }
+        }
+        .navigationTitle("Roles")
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    newRoleName = ""
+                    showingNewRoleSheet = true
+                } label: {
+                    Label("New Role", systemImage: "plus")
+                }
+                .help("New role")
+            }
+        }
+    }
+
+    private var programsList: some View {
+        List(selection: $itemSelection) {
+            if let planIdx = baselinePlanIndex {
+                ForEach(document.planner.plans[planIdx].programs) { program in
+                    ProgramSidebarRow(program: program, count: programInitiativeCount(program.id))
+                        .tag(SidebarSelection.program(program.id))
+                        .contextMenu {
+                            Button("Delete", role: .destructive) { deleteProgram(program.id) }
+                        }
+                }
+            }
+        }
+        .overlay {
+            if (baselinePlanIndex.map { document.planner.plans[$0].programs.isEmpty } ?? true) {
+                ContentUnavailableView("No Programs", systemImage: "rectangle.stack",
+                                       description: Text("Click + to add a program."))
+            }
+        }
+        .navigationTitle("Programs")
+        .toolbar {
+            ToolbarItem {
+                Button { addProgram() } label: {
+                    Label("New Program", systemImage: "plus")
+                }
+                .help("New program")
+            }
+        }
+    }
+
+    private var initiativesList: some View {
+        List(selection: $itemSelection) {
+            if let planIdx = baselinePlanIndex {
+                ForEach(document.planner.plans[planIdx].initiatives) { initiative in
+                    InitiativeSidebarRow(initiative: initiative)
+                        .tag(SidebarSelection.initiative(initiative.id))
+                        .contextMenu {
+                            Button("Delete", role: .destructive) { deleteInitiative(initiative.id) }
+                        }
+                }
+            }
+        }
+        .overlay {
+            if (baselinePlanIndex.map { document.planner.plans[$0].initiatives.isEmpty } ?? true) {
+                ContentUnavailableView("No Initiatives", systemImage: "flag",
+                                       description: Text("Click + to add an initiative."))
+            }
+        }
+        .navigationTitle("Initiatives")
+        .toolbar {
+            ToolbarItem {
+                Button { addInitiative() } label: {
+                    Label("New Initiative", systemImage: "plus")
+                }
+                .help("New initiative")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var planningView: some View {
+        if let planIdx = baselinePlanIndex {
+            PlanningGridView(
+                plan: $document.planner.plans[planIdx],
+                resources: $document.planner.resources,
+                teams: document.planner.teams,
+                roles: document.planner.roles
+            )
+        } else {
+            emptyDetail
+        }
+    }
+
+    @ViewBuilder
+    private var reportsView: some View {
+        if let planIdx = baselinePlanIndex {
+            ReportsView(
+                plan: $document.planner.plans[planIdx],
+                resources: $document.planner.resources,
+                roles: document.planner.roles,
+                displayCurrency: document.planner.displayCurrency,
+                conversionRates: document.planner.conversionRates
+            )
+        } else {
+            emptyDetail
+        }
+    }
+
+    // MARK: Detail (right column)
+    //
+    // We pair the active category with the item selection so a stale selection
+    // (e.g. .resource left over after switching to Teams) doesn't render.
 
     @ViewBuilder
     private var detail: some View {
-        switch selection {
-        case .resource(let id):
+        switch (category, itemSelection) {
+        case (.resources, .resource(let id)):
             if let idx = document.planner.resources.firstIndex(where: { $0.id == id }) {
                 ResourceDetailView(
                     resource: $document.planner.resources[idx],
@@ -222,19 +342,20 @@ struct ContentView: View {
                 )
             } else { emptyDetail }
 
-        case .role(let id):
+        case (.roles, .role(let id)):
             if let idx = document.planner.roles.firstIndex(where: { $0.id == id }) {
                 RoleDetailView(
                     role: $document.planner.roles[idx],
                     resources: $document.planner.resources,
                     teams: document.planner.teams,
                     onAddResource: { newID in
-                        selection = .resource(newID)
+                        category = .resources
+                        DispatchQueue.main.async { itemSelection = .resource(newID) }
                     }
                 )
             } else { emptyDetail }
 
-        case .team(let id):
+        case (.teams, .team(let id)):
             if let idx = document.planner.teams.firstIndex(where: { $0.id == id }) {
                 TeamDetailView(
                     team: $document.planner.teams[idx],
@@ -242,11 +363,14 @@ struct ContentView: View {
                     roles: document.planner.roles,
                     plan: baselinePlanIndex.map { document.planner.plans[$0] },
                     displayCurrency: document.planner.displayCurrency,
-                    onSelectResource: { rid in selection = .resource(rid) }
+                    onSelectResource: { rid in
+                        category = .resources
+                        DispatchQueue.main.async { itemSelection = .resource(rid) }
+                    }
                 )
             } else { emptyDetail }
 
-        case .program(let id):
+        case (.programs, .program(let id)):
             if let planIdx = baselinePlanIndex,
                let progIdx = document.planner.plans[planIdx].programs.firstIndex(where: { $0.id == id }) {
                 ProgramDetailView(
@@ -256,12 +380,13 @@ struct ContentView: View {
                     displayCurrency: document.planner.displayCurrency,
                     conversionRates: document.planner.conversionRates,
                     onSelectInitiative: { initiativeID in
-                        selection = .initiative(initiativeID)
+                        category = .initiatives
+                        DispatchQueue.main.async { itemSelection = .initiative(initiativeID) }
                     }
                 )
             } else { emptyDetail }
 
-        case .initiative(let id):
+        case (.initiatives, .initiative(let id)):
             if let planIdx = document.planner.plans.firstIndex(where: { $0.initiatives.contains(where: { $0.id == id }) }),
                let initIdx = document.planner.plans[planIdx].initiatives.firstIndex(where: { $0.id == id }) {
                 InitiativeDetailView(
@@ -274,28 +399,7 @@ struct ContentView: View {
                 )
             } else { emptyDetail }
 
-        case .planning:
-            if let planIdx = baselinePlanIndex {
-                PlanningGridView(
-                    plan: $document.planner.plans[planIdx],
-                    resources: $document.planner.resources,
-                    teams: document.planner.teams,
-                    roles: document.planner.roles
-                )
-            } else { emptyDetail }
-
-        case .reports:
-            if let planIdx = baselinePlanIndex {
-                ReportsView(
-                    plan: $document.planner.plans[planIdx],
-                    resources: $document.planner.resources,
-                    roles: document.planner.roles,
-                    displayCurrency: document.planner.displayCurrency,
-                    conversionRates: document.planner.conversionRates
-                )
-            } else { emptyDetail }
-
-        case .none:
+        default:
             emptyDetail
         }
     }
@@ -303,8 +407,8 @@ struct ContentView: View {
     private var emptyDetail: some View {
         ContentUnavailableView(
             "Nothing Selected",
-            systemImage: "sidebar.left",
-            description: Text("Pick a resource, role, or section from the sidebar.")
+            systemImage: "sidebar.right",
+            description: Text("Pick an item from the list.")
         )
     }
 
@@ -333,7 +437,7 @@ struct ContentView: View {
         let new = Resource(name: "")
         DispatchQueue.main.async {
             document.planner.resources.append(new)
-            selection = .resource(new.id)
+            itemSelection = .resource(new.id)
         }
     }
 
@@ -345,7 +449,7 @@ struct ContentView: View {
         guard let planIdx = baselinePlanIndex else { return }
         DispatchQueue.main.async {
             document.planner.plans[planIdx].initiatives.append(new)
-            selection = .initiative(new.id)
+            itemSelection = .initiative(new.id)
         }
     }
 
@@ -353,7 +457,7 @@ struct ContentView: View {
         let new = Team(name: "")
         DispatchQueue.main.async {
             document.planner.teams.append(new)
-            selection = .team(new.id)
+            itemSelection = .team(new.id)
         }
     }
 
@@ -362,17 +466,15 @@ struct ContentView: View {
     }
 
     private func deleteTeam(_ id: UUID) {
-        // Detach members
         for i in document.planner.resources.indices where document.planner.resources[i].teamID == id {
             document.planner.resources[i].teamID = nil
             document.planner.resources[i].isCustomTeam = false
         }
-        // Clear from roles' defaults
         for i in document.planner.roles.indices where document.planner.roles[i].defaultTeamID == id {
             document.planner.roles[i].defaultTeamID = nil
         }
         document.planner.teams.removeAll { $0.id == id }
-        if selection == .team(id) { selection = nil }
+        if itemSelection == .team(id) { itemSelection = nil }
     }
 
     private func addProgram() {
@@ -383,7 +485,7 @@ struct ContentView: View {
         guard let planIdx = baselinePlanIndex else { return }
         DispatchQueue.main.async {
             document.planner.plans[planIdx].programs.append(new)
-            selection = .program(new.id)
+            itemSelection = .program(new.id)
         }
     }
 
@@ -394,23 +496,23 @@ struct ContentView: View {
 
     private func deleteProgram(_ id: UUID) {
         guard let planIdx = baselinePlanIndex else { return }
-        // Detach any member initiatives — keep them but unset their programID.
         for i in document.planner.plans[planIdx].initiatives.indices
             where document.planner.plans[planIdx].initiatives[i].programID == id {
             document.planner.plans[planIdx].initiatives[i].programID = nil
         }
         document.planner.plans[planIdx].programs.removeAll { $0.id == id }
-        if selection == .program(id) { selection = nil }
+        if itemSelection == .program(id) { itemSelection = nil }
     }
 
     private func deleteInitiative(_ id: UUID) {
         guard let planIdx = baselinePlanIndex else { return }
         document.planner.plans[planIdx].initiatives.removeAll { $0.id == id }
-        // Clean up assignments that reference this initiative
         document.planner.plans[planIdx].assignments.removeAll { $0.initiativeID == id }
-        if selection == .initiative(id) { selection = nil }
+        if itemSelection == .initiative(id) { itemSelection = nil }
     }
 }
+
+// MARK: - Sidebar row views (used by middle-column lists)
 
 private struct RoleSidebarRow: View {
     let role: Role
@@ -501,7 +603,7 @@ private struct InitiativeSidebarRow: View {
     }
 }
 
-/// Sheet to create a new role with a name. Used from the sidebar header + button.
+/// Sheet to create a new role with a name. Used from the Roles list toolbar.
 struct NewRoleSheetView: View {
     @Binding var name: String
     let onClose: (_ commit: Bool) -> Void
